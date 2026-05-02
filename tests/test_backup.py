@@ -130,6 +130,46 @@ class TestNoChangesShortCircuit:
         assert calls == [], "rsync should not have been invoked when nothing changed"
 
 
+class TestRenameAndEdit:
+    def test_rename_plus_edit_converges_on_dest(self, src_dest, basic_options):
+        # NEW-H3 regression: a rename combined with an in-place edit produces a
+        # snapshot inode whose path AND content both differ from before. The
+        # rename is rejected by the inode-reuse defense AND the modification
+        # detector skips it because paths differ. Without H3's fix, the file
+        # would be invisible to the diff and the dest would silently keep the
+        # old content at the old path.
+        src, dest = src_dest
+        run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        # Pick a file, rename it, and rewrite its content. Use os.rename to
+        # preserve the inode (so this is genuinely the rename+edit case).
+        target = next(p for p in src.rglob("*.bin") if p.is_file())
+        old_rel = target.relative_to(src).as_posix()
+        new_rel = "renamed_and_edited.bin"
+        new_content = b"BRAND NEW CONTENT FOR THE RENAME-AND-EDIT TEST" * 4
+        target.rename(src / new_rel)
+        with (src / new_rel).open("wb") as f:
+            f.write(new_content)
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        # Dest must have the file at the new path with the new content,
+        # and the old path must no longer exist on dest.
+        assert (dest / new_rel).read_bytes() == new_content
+        assert not (dest / old_rel).exists(), (
+            "old path must be removed from dest by rsync's --delete-before"
+        )
+
+
 class TestInPlaceModification:
     def test_in_place_edit_triggers_backup_and_updates_dest(
         self, src_dest, basic_options
@@ -376,6 +416,34 @@ class TestCatastrophicDiffSanityCheck:
             args=_args(force=True),
         )
         assert rc == 0
+
+
+class TestSnapshotOnlyHonorsLock:
+    def test_snapshot_only_blocked_by_held_lock(
+        self, tmp_path, make_tree, basic_options
+    ):
+        # NEW-M1 (4th pass): --snapshot-only against a source whose lock is
+        # held by another irsync run must refuse to race rather than risk a
+        # concurrent _cleanup_orphan_tempfiles deleting the snapshot-only
+        # tempfile mid-write.
+        import fcntl
+
+        from irsync.backup import LOCKFILE_NAME
+
+        src = tmp_path / "src_only_locked"
+        make_tree(src, num_files=3, depth=1)
+        lock_path = src / LOCKFILE_NAME
+        with lock_path.open("w") as held:
+            fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=None,
+                options=basic_options,
+                args=_args(snapshot_only=True),
+            )
+        assert rc != 0, "--snapshot-only should refuse when lock is held"
+        # Snapshot file should NOT have been written (lock prevented it).
+        assert not (src / SNAPSHOT_FILENAME).exists()
 
 
 class TestLockfile:

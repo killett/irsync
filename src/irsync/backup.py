@@ -202,8 +202,23 @@ def _run_snapshot_only(*, source_arg: str, options: Options) -> int:
     else:
         src = ensure_local_dir(arg)
 
-    rows = snapshot_tree(src)
-    _atomic_write_snapshot(rows, src, src / SNAPSHOT_FILENAME)
+    # Acquire the same lock as a regular backup. Without it, a concurrent
+    # `_run_backup_for_endpoints` could call `_cleanup_orphan_tempfiles` and
+    # delete this run's `.irsync-snap-*` tempfile mid-write, which would make
+    # `os.replace(tmp_path, target)` fail with FileNotFoundError.
+    try:
+        with _source_lock(src):
+            rows = snapshot_tree(src)
+            _atomic_write_snapshot(rows, src, src / SNAPSHOT_FILENAME)
+    except BlockingIOError:
+        logging.error(
+            "Another irsync run is already in progress against %s "
+            "(lock %s is held). Refusing to race.",
+            src,
+            src / LOCKFILE_NAME,
+        )
+        return 75  # EX_TEMPFAIL — try again later
+
     logging.info(
         "Snapshot-only: wrote %d rows to %s", len(rows), src / SNAPSHOT_FILENAME
     )

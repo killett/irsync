@@ -120,8 +120,12 @@ def compute_moves(
     *,
     skip_hardlinks: bool = True,
     include_symlinks: bool = False,
-) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Compare two inode indices and return ``(dir_moves, file_moves)``.
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]], set[tuple[int, int]]]:
+    """Compare two inode indices and return ``(dir_moves, file_moves, consumed_keys)``.
+
+    ``consumed_keys`` is the set of ``(dev, ino)`` pairs that were turned into
+    moves; :func:`compute_changes` uses it to figure out which shared inodes
+    still need to be reflected as deleted/created/modified in the diff.
 
     Args:
         before: Inode index of the source tree at the time of the previous snapshot.
@@ -130,10 +134,11 @@ def compute_moves(
         include_symlinks: If True, include symlinks in the comparison.
 
     Returns:
-        Tuple of ``(dir_moves, file_moves)``, each a list of ``(old_path, new_path)``.
+        ``(dir_moves, file_moves, consumed_keys)``.
     """
     dir_moves: list[tuple[str, str]] = []
     file_moves: list[tuple[str, str]] = []
+    consumed: set[tuple[int, int]] = set()
 
     shared = set(before.keys()).intersection(after.keys())
     for key in shared:
@@ -194,6 +199,7 @@ def compute_moves(
                 dir_moves.append((old_path, new_path))
             else:
                 file_moves.append((old_path, new_path))
+            consumed.add(key)
         else:
             logging.debug(
                 "Complex hardlink mapping ignored: %s -> %s",
@@ -203,7 +209,7 @@ def compute_moves(
 
     dir_moves = sorted({(o, n) for (o, n) in dir_moves if o != n})
     file_moves = sorted({(o, n) for (o, n) in file_moves if o != n})
-    return dir_moves, file_moves
+    return dir_moves, file_moves, consumed
 
 
 def plan_directory_moves(dir_moves: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -327,7 +333,7 @@ def compute_changes(
     before = index_by_inode(before_rows)
     after = index_by_inode(after_rows)
 
-    dir_moves, file_moves = compute_moves(
+    dir_moves, file_moves, consumed_keys = compute_moves(
         before, after, skip_hardlinks=skip_hardlinks, include_symlinks=include_symlinks
     )
     dir_moves = prune_redundant_dir_moves(dir_moves)
@@ -335,43 +341,53 @@ def compute_changes(
 
     before_keys = set(before.keys())
     after_keys = set(after.keys())
-    deleted_paths = sorted(
+    deleted_paths = [
         p
         for k, e in before.items()
         if k not in after_keys and e["type"] in ("d", "f")
         for p in e["paths"]
-    )
-    created_paths = sorted(
+    ]
+    created_paths = [
         p
         for k, e in after.items()
         if k not in before_keys and e["type"] in ("d", "f")
         for p in e["paths"]
-    )
+    ]
 
-    # In-place modifications: same inode, same path, but size or mtime
-    # differs. Without this check the "no changes" short-circuit in backup.py
-    # would skip the backup whenever the user edited a file in place, since
-    # such an edit produces no move and no created/deleted entry.
-    # Conservative on missing mtime (sentinel -1): treat as modified so we
-    # never skip a backup we can't verify is up-to-date.
+    # Inodes that exist in BOTH snapshots but weren't consumed by a move.
+    # This block closes the rename-and-edit invisibility (NEW-H3) plus the
+    # symlink/hardlink/type-change variants (NEW-H4): when compute_moves
+    # declines an inode for any reason, the inode's path-set difference
+    # still represents real changes the dest must reflect.
+    #   - paths only in before  → add to deleted (rsync removes from dest)
+    #   - paths only in after   → add to created (rsync transfers to dest)
+    #   - paths in both with size/mtime change → add to modified (rsync
+    #     re-transfers content). Skipped for directories, whose mtime ticks
+    #     for any child-level change already reported elsewhere.
     modified_paths: list[str] = []
-    for key in before_keys & after_keys:
+    for key in (before_keys & after_keys) - consumed_keys:
         b = before[key]
         a = after[key]
-        # Skip directories — their mtime ticks for any child change, which
-        # gets reported via the entry-level moves/creates/deletes already.
-        if b["type"] == "d" or a["type"] == "d":
-            continue
-        if b["paths"] != a["paths"]:
-            continue  # path differs → handled by compute_moves above
+        only_in_before = b["paths"] - a["paths"]
+        only_in_after = a["paths"] - b["paths"]
+        shared_paths = b["paths"] & a["paths"]
+        deleted_paths.extend(only_in_before)
+        created_paths.extend(only_in_after)
         if (
-            b["size"] != a["size"]
-            or b["mtime_ns"] == -1
-            or a["mtime_ns"] == -1
-            or b["mtime_ns"] != a["mtime_ns"]
+            shared_paths
+            and b["type"] != "d"
+            and a["type"] != "d"
+            and (
+                b["size"] != a["size"]
+                or b["mtime_ns"] == -1
+                or a["mtime_ns"] == -1
+                or b["mtime_ns"] != a["mtime_ns"]
+            )
         ):
-            modified_paths.extend(b["paths"])
-    modified_paths.sort()
+            modified_paths.extend(shared_paths)
+    deleted_paths = sorted(set(deleted_paths))
+    created_paths = sorted(set(created_paths))
+    modified_paths = sorted(set(modified_paths))
 
     return Changes(
         dir_moves=dir_moves,

@@ -37,7 +37,7 @@ class TestComputeMoves:
     def test_simple_file_rename(self):
         before = [_row(ino=10, path="old.txt")]
         after = [_row(ino=10, path="new.txt")]
-        dir_moves, file_moves = compute_moves(
+        dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )
         assert dir_moves == []
@@ -54,7 +54,7 @@ class TestComputeMoves:
         ]
         before_idx = index_by_inode(before)
         after_idx = index_by_inode(after)
-        dir_moves, file_moves = compute_moves(before_idx, after_idx)
+        dir_moves, file_moves, _ = compute_moves(before_idx, after_idx)
         assert dir_moves == [("oldDir", "newDir")]
         # File move IS reported by compute_moves; suppression happens later via the helper.
         assert file_moves == [("oldDir/inside.txt", "newDir/inside.txt")]
@@ -62,7 +62,7 @@ class TestComputeMoves:
     def test_unchanged_paths_omitted(self):
         before = [_row(ino=30, path="same.txt")]
         after = [_row(ino=30, path="same.txt")]
-        dir_moves, file_moves = compute_moves(
+        dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )
         assert dir_moves == []
@@ -71,7 +71,7 @@ class TestComputeMoves:
     def test_created_inodes_not_reported_as_moves(self):
         before = []
         after = [_row(ino=40, path="new_only.txt")]
-        dir_moves, file_moves = compute_moves(
+        dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )
         assert dir_moves == [] and file_moves == []
@@ -83,7 +83,7 @@ class TestComputeMoves:
         # the legitimate dest file at the new path.
         before = [_row(ino=100, size=50, mtime_ns=1_000, path="old.txt")]
         after = [_row(ino=100, size=999, mtime_ns=2_000, path="unrelated.bin")]
-        dir_moves, file_moves = compute_moves(
+        dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )
         assert file_moves == [], (
@@ -94,7 +94,7 @@ class TestComputeMoves:
         # Same size by coincidence; mtime differs → not a move.
         before = [_row(ino=100, size=42, mtime_ns=1_000, path="old.txt")]
         after = [_row(ino=100, size=42, mtime_ns=2_000, path="other.txt")]
-        dir_moves, file_moves = compute_moves(
+        dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )
         assert file_moves == [], "same size but different mtime should not be a move"
@@ -103,7 +103,7 @@ class TestComputeMoves:
         # Pure rename: same inode, same size, same mtime_ns.
         before = [_row(ino=100, size=42, mtime_ns=1_500, path="before.txt")]
         after = [_row(ino=100, size=42, mtime_ns=1_500, path="after.txt")]
-        dir_moves, file_moves = compute_moves(
+        dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )
         assert file_moves == [("before.txt", "after.txt")]
@@ -111,7 +111,7 @@ class TestComputeMoves:
     def test_hardlinks_skipped_by_default(self):
         before = [_row(ino=50, nlink=2, path="a"), _row(ino=50, nlink=2, path="link")]
         after = [_row(ino=50, nlink=2, path="b"), _row(ino=50, nlink=2, path="link")]
-        dir_moves, file_moves = compute_moves(
+        dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )
         assert file_moves == []
@@ -243,3 +243,56 @@ class TestComputeChanges:
         after = [_row(ino=700, size=10, mtime_ns=2_000, path="legacy.txt")]
         changes = compute_changes(before, after)
         assert changes.modified == ["legacy.txt"]
+
+    def test_rename_and_edit_falls_back_to_create_plus_delete(self):
+        # NEW-H3 regression: same inode, path differs, AND size/mtime differ.
+        # compute_moves correctly refuses the move (could be inode reuse),
+        # but the path change MUST still appear in deleted/created so rsync
+        # actually removes the old path on dest and creates the new one.
+        # Otherwise the dest is left with the old content at the old path.
+        before = [_row(ino=800, size=50, mtime_ns=1_000, path="foo.txt")]
+        after = [_row(ino=800, size=75, mtime_ns=2_000, path="bar.txt")]
+        changes = compute_changes(before, after)
+        assert changes.file_moves == [], "rename refused due to size/mtime mismatch"
+        assert "foo.txt" in changes.deleted, (
+            "old path must appear in deleted so rsync removes it from dest"
+        )
+        assert "bar.txt" in changes.created, (
+            "new path must appear in created so rsync transfers it"
+        )
+        assert changes.any_changes(), "rename+edit must NOT short-circuit the backup"
+
+    def test_pure_rename_still_optimizes_as_a_move(self):
+        # Sanity: with the H3 fallback in place, the genuine-rename optimization
+        # must still work — same inode, paths differ, size and mtime match.
+        before = [_row(ino=801, size=50, mtime_ns=1_500, path="old.txt")]
+        after = [_row(ino=801, size=50, mtime_ns=1_500, path="new.txt")]
+        changes = compute_changes(before, after)
+        assert changes.file_moves == [("old.txt", "new.txt")]
+        assert "old.txt" not in changes.deleted
+        assert "new.txt" not in changes.created
+
+    def test_symlink_rename_appears_in_deleted_and_created(self):
+        # NEW-H4: symlinks are skipped by compute_moves (include_symlinks=False),
+        # but a renamed symlink still represents a real path change. The old
+        # path must end up in deleted and the new in created.
+        before = [_row(ino=802, type="l", size=5, mtime_ns=1_000, path="old.lnk")]
+        after = [_row(ino=802, type="l", size=5, mtime_ns=1_000, path="new.lnk")]
+        changes = compute_changes(before, after)
+        assert "old.lnk" in changes.deleted
+        assert "new.lnk" in changes.created
+
+    def test_hardlink_path_drop_appears_in_deleted(self):
+        # NEW-H4: hardlinked file with one of its paths removed. Inode stays
+        # in both indices; compute_moves skips hardlinks; but the dropped
+        # path must show up in deleted so rsync removes it from dest.
+        before = [
+            _row(ino=803, nlink=2, path="a"),
+            _row(ino=803, nlink=2, path="b"),
+        ]
+        after = [_row(ino=803, nlink=1, path="a")]
+        changes = compute_changes(before, after)
+        assert "b" in changes.deleted, "removed hardlink path must appear in deleted"
+        assert "a" not in changes.deleted, (
+            "kept hardlink path must NOT appear in deleted"
+        )
