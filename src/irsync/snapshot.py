@@ -12,6 +12,8 @@ from typing import Literal, TypedDict
 from irsync import __version__
 
 SNAPSHOT_FILENAME: str = ".irsync_snapshot.jsonl"
+LOCKFILE_NAME: str = ".irsync.lock"
+SNAPSHOT_TEMPFILE_PREFIX: str = ".irsync-snap-"
 
 
 class SnapshotMismatch(Exception):
@@ -99,8 +101,14 @@ def snapshot_tree(
 
             rel = entry.relative_to(root).as_posix()
 
-            # Skip the snapshot file at the source root.
-            if rel == SNAPSHOT_FILENAME:
+            # Skip irsync's reserved files at the source root: the snapshot
+            # itself, the lockfile, and any orphan tempfiles from a killed
+            # _atomic_write_snapshot. Subdirectory files with the same names
+            # are still included (this is the H1/NEW-H2 anchored-exclude
+            # principle: only the root entries are reserved).
+            if rel in (SNAPSHOT_FILENAME, LOCKFILE_NAME):
+                continue
+            if "/" not in rel and rel.startswith(SNAPSHOT_TEMPFILE_PREFIX):
                 continue
 
             is_dir = stat.S_ISDIR(st.st_mode)

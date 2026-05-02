@@ -11,7 +11,11 @@ import subprocess  # noqa: S404 — invoking rsync is the whole point of this mo
 import sys
 from pathlib import Path
 
-from irsync.snapshot import SNAPSHOT_FILENAME
+from irsync.snapshot import (
+    LOCKFILE_NAME,
+    SNAPSHOT_FILENAME,
+    SNAPSHOT_TEMPFILE_PREFIX,
+)
 
 _FILES_RE = re.compile(r"Number of files:\s+([\d,]+)")
 _SIZE_RE = re.compile(r"(?:total size is|Total file size:)\s+([^\s]+)")
@@ -69,10 +73,15 @@ def build_rsync_command(
             ssh_cmd += f" -i {shlex.quote(os.fspath(ssh_key))}"
         cmd.extend(["-e", ssh_cmd])
 
-    # Anchor with leading "/" so only the snapshot at the source root is excluded;
-    # without the anchor, rsync's pattern matches the basename at every depth and
-    # would silently skip user files that happen to share the name.
+    # Anchor each pattern with a leading "/" so only the file at the source
+    # root is excluded; without the anchor, rsync's pattern matches the
+    # basename at every depth and would silently skip user files that happen
+    # to share the name. These three are irsync's reserved namespace at the
+    # source root: the snapshot itself, the lockfile, and any orphan
+    # tempfiles from a killed _atomic_write_snapshot.
     cmd.extend(["--exclude", f"/{SNAPSHOT_FILENAME}"])
+    cmd.extend(["--exclude", f"/{LOCKFILE_NAME}"])
+    cmd.extend(["--exclude", f"/{SNAPSHOT_TEMPFILE_PREFIX}*"])
 
     if not no_exclude and exclude_dirs:
         for d in exclude_dirs:

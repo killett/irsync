@@ -206,3 +206,40 @@ class TestComputeChanges:
         after = [_row(ino=300, path="new.txt")]
         changes = compute_changes(before, after)
         assert changes.any_changes()
+
+    def test_in_place_modification_reported_as_modified(self):
+        # NEW-H1 regression: same path, same inode, different size/mtime means the
+        # file was edited in place. compute_changes MUST report this so the
+        # backup runs; otherwise the dest never gets the new content.
+        before = [_row(ino=400, size=10, mtime_ns=1_000, path="report.txt")]
+        after = [_row(ino=400, size=20, mtime_ns=2_000, path="report.txt")]
+        changes = compute_changes(before, after)
+        assert changes.modified == ["report.txt"]
+        assert changes.any_changes(), (
+            "modification-only diff must NOT trigger the no-changes short-circuit"
+        )
+
+    def test_unchanged_file_not_reported_as_modified(self):
+        # Same inode, same path, same size, same mtime → nothing changed.
+        before = [_row(ino=500, size=10, mtime_ns=1_000, path="stable.txt")]
+        after = [_row(ino=500, size=10, mtime_ns=1_000, path="stable.txt")]
+        changes = compute_changes(before, after)
+        assert changes.modified == []
+        assert not changes.any_changes()
+
+    def test_directory_mtime_change_does_not_report_modified(self):
+        # A dir's mtime ticks whenever entries inside change. Reporting that as
+        # "modified" would just duplicate what created/deleted/file_moves already
+        # show. Skip dirs in the modification check.
+        before = [_row(ino=600, type="d", size=0, mtime_ns=1_000, path="d")]
+        after = [_row(ino=600, type="d", size=4096, mtime_ns=2_000, path="d")]
+        changes = compute_changes(before, after)
+        assert changes.modified == []
+
+    def test_unknown_mtime_treated_as_modified(self):
+        # Conservative: if mtime is unknown on either side (legacy snapshot
+        # sentinel -1), assume modified and let rsync sort it out.
+        before = [_row(ino=700, size=10, mtime_ns=-1, path="legacy.txt")]
+        after = [_row(ino=700, size=10, mtime_ns=2_000, path="legacy.txt")]
+        changes = compute_changes(before, after)
+        assert changes.modified == ["legacy.txt"]

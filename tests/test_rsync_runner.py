@@ -43,6 +43,25 @@ class TestBuildRsyncCommand:
             "unanchored .irsync_snapshot.jsonl exclude would skip subdir files of that name"
         )
 
+    def test_excludes_lockfile_anchored_to_root(self):
+        # NEW-H2: the lockfile is created by irsync at the source root and
+        # must not be transferred to the dest tree. Anchored so a user file
+        # at <src>/sub/.irsync.lock still gets backed up.
+        cmd = build_rsync_command(source="/src/", dest="/dst/", dry_run=False)
+        excluded = [cmd[j + 1] for j, x in enumerate(cmd[:-1]) if x == "--exclude"]
+        assert "/.irsync.lock" in excluded, (
+            f"lockfile exclude must be anchored to root; got {excluded!r}"
+        )
+
+    def test_excludes_snapshot_tempfile_pattern(self):
+        # NEW-M1: orphan .irsync-snap-* tempfiles from a killed _atomic_write_snapshot
+        # must not be transferred. Anchored to the source root.
+        cmd = build_rsync_command(source="/src/", dest="/dst/", dry_run=False)
+        excluded = [cmd[j + 1] for j, x in enumerate(cmd[:-1]) if x == "--exclude"]
+        assert "/.irsync-snap-*" in excluded, (
+            f"snap-tempfile exclude must be anchored to root; got {excluded!r}"
+        )
+
     def test_user_excludes_added(self):
         cmd = build_rsync_command(
             source="/src/",

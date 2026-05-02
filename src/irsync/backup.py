@@ -19,15 +19,15 @@ from irsync.paths import with_trailing_slash
 from irsync.replay import apply_moves
 from irsync.rsync_runner import build_rsync_command, run_dry_run, run_real_sync
 from irsync.snapshot import (
+    LOCKFILE_NAME,
     SNAPSHOT_FILENAME,
+    SNAPSHOT_TEMPFILE_PREFIX,
     Row,
     SnapshotMismatch,
     read_snapshot,
     snapshot_tree,
     write_snapshot,
 )
-
-LOCKFILE_NAME: str = ".irsync.lock"
 
 # Refuse to proceed when the diff says this fraction of the previously-recorded
 # tree is gone — almost always a swapped-args / wrong-snapshot accident.
@@ -100,6 +100,11 @@ def _format_preview(changes: Changes) -> str:
     lines.append(f"=== File moves ({len(changes.file_moves)}) ===")
     for o, n in changes.file_moves:
         lines.append(f"  {o}  ->  {n}")
+    lines.append(
+        f"=== Modified in place, will be re-transferred ({len(changes.modified)}) ==="
+    )
+    for p in changes.modified:
+        lines.append(f"  ~ {p}")
     lines.append(
         f"=== Created on source, will be transferred ({len(changes.created)}) ==="
     )
@@ -205,6 +210,31 @@ def _run_snapshot_only(*, source_arg: str, options: Options) -> int:
     return 0
 
 
+def _cleanup_orphan_tempfiles(src_root: Path) -> int:
+    """Delete leftover ``.irsync-snap-*`` tempfiles from prior killed runs.
+
+    ``_atomic_write_snapshot`` uses ``tempfile.mkstemp`` and could leave an
+    orphan if the process dies between mkstemp and os.replace. Without this
+    cleanup the orphans accumulate at the source root, get included in the
+    next snapshot, and get backed up to dest as garbage.
+    """
+    removed = 0
+    try:
+        entries = list(src_root.iterdir())
+    except (FileNotFoundError, PermissionError):
+        return 0
+    for p in entries:
+        if p.name.startswith(SNAPSHOT_TEMPFILE_PREFIX) and p.is_file():
+            try:
+                p.unlink()
+                removed += 1
+            except OSError as e:
+                logging.warning("Could not remove orphan tempfile %s: %s", p, e)
+    if removed:
+        logging.info("Cleaned up %d orphan .irsync-snap-* tempfile(s).", removed)
+    return removed
+
+
 def _run_backup_for_endpoints(
     *,
     endpoints: Endpoints,
@@ -223,6 +253,11 @@ def _run_backup_for_endpoints(
     dest_root: Path | None = (
         endpoints.dest if isinstance(endpoints.dest, Path) else None
     )
+
+    # Sweep up any orphan tempfiles BEFORE snapshotting, so the snapshot
+    # doesn't include them and the next diff isn't polluted.
+    if src_root is not None:
+        _cleanup_orphan_tempfiles(src_root)
 
     # --snapshot-only: just write the snapshot to the source root and exit.
     if args.snapshot_only:

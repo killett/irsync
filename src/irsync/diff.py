@@ -287,16 +287,23 @@ def plan_directory_moves(dir_moves: list[tuple[str, str]]) -> list[tuple[str, st
 
 @dataclass(frozen=True)
 class Changes:
-    """The full delta between two snapshots: moves, creations, and deletions."""
+    """The full delta between two snapshots: moves, modifications, creations, deletions."""
 
     dir_moves: list[tuple[str, str]] = field(default_factory=list)
     file_moves: list[tuple[str, str]] = field(default_factory=list)
+    modified: list[str] = field(default_factory=list)
     created: list[str] = field(default_factory=list)
     deleted: list[str] = field(default_factory=list)
 
     def any_changes(self) -> bool:
-        """Return True if any moves, creations, or deletions are present."""
-        return bool(self.dir_moves or self.file_moves or self.created or self.deleted)
+        """Return True if any moves, modifications, creations, or deletions are present."""
+        return bool(
+            self.dir_moves
+            or self.file_moves
+            or self.modified
+            or self.created
+            or self.deleted
+        )
 
 
 def compute_changes(
@@ -340,9 +347,36 @@ def compute_changes(
         if k not in before_keys and e["type"] in ("d", "f")
         for p in e["paths"]
     )
+
+    # In-place modifications: same inode, same path, but size or mtime
+    # differs. Without this check the "no changes" short-circuit in backup.py
+    # would skip the backup whenever the user edited a file in place, since
+    # such an edit produces no move and no created/deleted entry.
+    # Conservative on missing mtime (sentinel -1): treat as modified so we
+    # never skip a backup we can't verify is up-to-date.
+    modified_paths: list[str] = []
+    for key in before_keys & after_keys:
+        b = before[key]
+        a = after[key]
+        # Skip directories — their mtime ticks for any child change, which
+        # gets reported via the entry-level moves/creates/deletes already.
+        if b["type"] == "d" or a["type"] == "d":
+            continue
+        if b["paths"] != a["paths"]:
+            continue  # path differs → handled by compute_moves above
+        if (
+            b["size"] != a["size"]
+            or b["mtime_ns"] == -1
+            or a["mtime_ns"] == -1
+            or b["mtime_ns"] != a["mtime_ns"]
+        ):
+            modified_paths.extend(b["paths"])
+    modified_paths.sort()
+
     return Changes(
         dir_moves=dir_moves,
         file_moves=file_moves,
+        modified=modified_paths,
         created=created_paths,
         deleted=deleted_paths,
     )

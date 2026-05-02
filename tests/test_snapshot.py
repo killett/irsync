@@ -4,7 +4,9 @@ import os
 import pytest
 
 from irsync.snapshot import (
+    LOCKFILE_NAME,
     SNAPSHOT_FILENAME,
+    SNAPSHOT_TEMPFILE_PREFIX,
     SnapshotMismatch,
     read_jsonl,
     read_snapshot,
@@ -60,6 +62,46 @@ class TestSnapshotTree:
         (tmp_path / "sub").mkdir()
         nested = f"sub/{SNAPSHOT_FILENAME}"
         (tmp_path / "sub" / SNAPSHOT_FILENAME).write_text("[]")
+        rows = snapshot_tree(tmp_path)
+        paths = {r["path"] for r in rows}
+        assert nested in paths
+
+    def test_excludes_lockfile_at_root(self, tmp_path):
+        # NEW-H2: the lockfile is created by irsync at the source root before
+        # snapshot_tree runs; it must not appear in the snapshot rows or its
+        # mtime ticking would defeat the no-changes short-circuit.
+        (tmp_path / LOCKFILE_NAME).write_text("")
+        (tmp_path / "real.txt").write_text("x")
+        rows = snapshot_tree(tmp_path)
+        paths = {r["path"] for r in rows}
+        assert LOCKFILE_NAME not in paths
+        assert "real.txt" in paths
+
+    def test_includes_lockfile_named_file_in_subdir(self, tmp_path):
+        # Subdir files with the lockfile basename are still user data.
+        (tmp_path / "sub").mkdir()
+        nested = f"sub/{LOCKFILE_NAME}"
+        (tmp_path / "sub" / LOCKFILE_NAME).write_text("user content")
+        rows = snapshot_tree(tmp_path)
+        paths = {r["path"] for r in rows}
+        assert nested in paths
+
+    def test_excludes_snap_tempfile_pattern_at_root(self, tmp_path):
+        # NEW-M1: orphan .irsync-snap-* tempfiles from a killed
+        # _atomic_write_snapshot must not be included in subsequent snapshots.
+        (tmp_path / f"{SNAPSHOT_TEMPFILE_PREFIX}abc123").write_text("")
+        (tmp_path / f"{SNAPSHOT_TEMPFILE_PREFIX}def456").write_text("")
+        (tmp_path / "real.txt").write_text("x")
+        rows = snapshot_tree(tmp_path)
+        paths = {r["path"] for r in rows}
+        assert not any(p.startswith(SNAPSHOT_TEMPFILE_PREFIX) for p in paths)
+        assert "real.txt" in paths
+
+    def test_includes_snap_tempfile_pattern_in_subdir(self, tmp_path):
+        # Subdir files matching the tempfile prefix are still user data.
+        (tmp_path / "sub").mkdir()
+        nested = f"sub/{SNAPSHOT_TEMPFILE_PREFIX}xyz"
+        (tmp_path / "sub" / f"{SNAPSHOT_TEMPFILE_PREFIX}xyz").write_text("user")
         rows = snapshot_tree(tmp_path)
         paths = {r["path"] for r in rows}
         assert nested in paths

@@ -7,9 +7,11 @@ import pytest
 
 from irsync.backup import _format_preview, run_backup
 from irsync.diff import Changes
-from irsync.snapshot import SNAPSHOT_FILENAME
+from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME
 
 from .conftest import inode_for, tree_signature
+
+_INTERNAL_FILES = {SNAPSHOT_FILENAME, LOCKFILE_NAME}
 
 
 class TestFormatPreview:
@@ -31,8 +33,19 @@ class TestFormatPreview:
 
     def test_empty_changes_renders_zero_counts(self):
         text = _format_preview(Changes())
-        assert "(0)" in text  # all four sections show zero counts
-        assert text.count("(0)") == 4
+        assert "(0)" in text  # all five sections show zero counts
+        assert text.count("(0)") == 5
+
+    def test_modified_files_listed_with_paths(self):
+        # NEW-H1 regression: in-place modifications must appear in the preview
+        # so the user knows which files rsync will re-transfer.
+        changes = Changes(
+            modified=["docs/report.md", "src/app.py"],
+        )
+        text = _format_preview(changes)
+        assert "docs/report.md" in text
+        assert "src/app.py" in text
+        assert "Modified" in text
 
 
 def _args(**overrides):
@@ -74,10 +87,10 @@ class TestFirstBackup:
         assert rc == 0
         # Dest tree mirrors src (excluding the snapshot file)
         src_sig = {
-            k: v for k, v in tree_signature(src).items() if k != SNAPSHOT_FILENAME
+            k: v for k, v in tree_signature(src).items() if k not in _INTERNAL_FILES
         }
         dest_sig = {
-            k: v for k, v in tree_signature(dest).items() if k != SNAPSHOT_FILENAME
+            k: v for k, v in tree_signature(dest).items() if k not in _INTERNAL_FILES
         }
         assert src_sig == dest_sig
         # Snapshot files written on both sides
@@ -115,6 +128,46 @@ class TestNoChangesShortCircuit:
         )
         assert rc == 0
         assert calls == [], "rsync should not have been invoked when nothing changed"
+
+
+class TestInPlaceModification:
+    def test_in_place_edit_triggers_backup_and_updates_dest(
+        self, src_dest, basic_options
+    ):
+        # NEW-H1 regression: modifying a file in place (same path, same inode,
+        # different content) MUST cause the next backup to run and update the
+        # dest. Without the modification check, irsync's "no changes"
+        # short-circuit would skip rsync entirely and the dest would stay
+        # silently stale.
+        src, dest = src_dest
+        # First backup to seed.
+        run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        # Pick a file and rewrite its content in place (no rename, no
+        # delete+create — just a write to the existing path).
+        target = next(p for p in src.rglob("*.bin") if p.is_file())
+        rel = target.relative_to(src).as_posix()
+        new_content = b"COMPLETELY DIFFERENT CONTENT FOR REGRESSION TEST" * 4
+        # Use open("wb") so we don't change the inode (writing in place).
+        with target.open("wb") as f:
+            f.write(new_content)
+        # Sanity: dest still has the old content right now.
+        assert (dest / rel).read_bytes() != new_content
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        # The dest must now have the new content. If irsync skipped rsync,
+        # this assertion fails and the bug is confirmed.
+        assert (dest / rel).read_bytes() == new_content
 
 
 class TestRenameOptimization:
@@ -189,6 +242,50 @@ class TestForceFlag:
         )
         assert rc == 0
         assert calls, "--force should invoke rsync even when nothing changed"
+
+
+class TestLockfileNotTransferred:
+    def test_lockfile_does_not_appear_on_dest(self, src_dest, basic_options):
+        # NEW-H2 regression: the lockfile lives at <src>/.irsync.lock for the
+        # duration of a run, but it must not be backed up to <dest>/.irsync.lock.
+        src, dest = src_dest
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert not (dest / LOCKFILE_NAME).exists(), (
+            "lockfile must be excluded from rsync transfer"
+        )
+
+
+class TestOrphanTempfileCleanup:
+    def test_orphan_snap_tempfile_removed_from_source_on_startup(
+        self, src_dest, basic_options
+    ):
+        # NEW-M1 regression: a leftover .irsync-snap-* tempfile from a previous
+        # killed run must be cleaned up, not backed up.
+        src, dest = src_dest
+        from irsync.snapshot import SNAPSHOT_TEMPFILE_PREFIX
+
+        orphan = src / f"{SNAPSHOT_TEMPFILE_PREFIX}leftover123"
+        orphan.write_text("garbage from a crashed run")
+        assert orphan.exists()
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert not orphan.exists(), (
+            "orphan .irsync-snap-* tempfile should be cleaned up at startup"
+        )
+        # And it never made it to dest.
+        assert not (dest / orphan.name).exists()
 
 
 class TestSubdirFileWithSnapshotName:
@@ -383,10 +480,10 @@ class TestProvenanceMismatchRejected:
         from .conftest import tree_signature
 
         src_sig = {
-            k: v for k, v in tree_signature(src_b).items() if k != SNAPSHOT_FILENAME
+            k: v for k, v in tree_signature(src_b).items() if k not in _INTERNAL_FILES
         }
         dest_sig = {
-            k: v for k, v in tree_signature(dest_b).items() if k != SNAPSHOT_FILENAME
+            k: v for k, v in tree_signature(dest_b).items() if k not in _INTERNAL_FILES
         }
         assert src_sig == dest_sig
 
