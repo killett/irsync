@@ -1,0 +1,64 @@
+[project]
+name = "irsync"
+requires-python = ">=3.12,<3.14"
+dependencies = []
+
+[tool.ruff.lint]
+select = [
+    "F",      # Pyflakes — unused imports, undefined names, etc.
+    "E",      # pycodestyle errors (subset — see ignores below)
+    "W",      # pycodestyle warnings
+    "B",      # flake8-bugbear
+    "B9",     # bugbear opinionated rules
+    "UP",     # pyupgrade — modernize syntax to latest Python
+    "I",      # isort — import ordering
+    "ANN",    # flake8-annotations — enforce type hints
+    "D",      # enable the pydocstyle rules
+    "S",      # bandit — security linter (subset — see ignores below)
+]
+ignore = [
+    "E501",   # line too long (handled by ruff format)
+    "D100",   # missing docstring in public module
+    "D104",   # missing docstring in public package (__init__.py)
+    "ANN204", # missing return type annotation for __init__
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "D", "S"]  # Otherwise Claude would either over-annotate every test or fight ruff constantly.
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+mypy_path = "src"
+
+# Uncomment when using rasterio or netCDF4:
+# [[tool.mypy.overrides]]
+# module = ["rasterio.*", "netCDF4.*"]
+# ignore_missing_imports = true
+
+[[tool.mypy.overrides]]  # Tests often have untyped functions and use dynamic features, so relax mypy rules for them.
+module = ["tests.*"]
+strict = false
+warn_return_any = false
+# Claude Opus 4.7 says: the test override has strict = false but that doesn't disable specific checks already enabled globally. So we also need to disable these individually:
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+addopts = "-v"
+pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["src"]
+
+# pixi is used for package management, but if you switch to using uv, it's a good idea to uncomment these lines for security.
+# [tool.uv]
+# exclude-newer = "7 days"

@@ -1,0 +1,25 @@
+[workspace]
+name = "irsync"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "osx-64"]
+exclude-newer = "7d"
+
+# To urgently bypass the cooldown for a CVE fix, add:
+# [exclude-newer]
+# affected-package = "0d"
+
+[dependencies]
+python = ">=3.12,<3.14"
+ruff = "*"
+mypy = "*"
+pytest = "*"
+pytest-cov = "*"
+pre-commit = "*"
+
+[tasks]
+# On macOS, pixi-installed tools (pytest, ruff, mypy) can fail due to shebang path resolution issues. Using python -m <tool> bypasses this reliably.
+test = "python -m pytest"
+test-cov = "python -m pytest --cov"  # Later on, consider adding --cov-fail-under=80
+lint = "python -m ruff check ."
+format = "python -m ruff format ."
+typecheck = "python -m mypy ."

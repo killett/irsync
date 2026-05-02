@@ -1,0 +1,29 @@
+repos:
+  - repo: local
+    hooks:  # On macOS, pixi-installed tools (pytest, ruff, mypy) can fail due to shebang path resolution issues. Using python -m <tool> bypasses this reliably.
+      - id: ruff
+        name: ruff
+        entry: pixi run python -m ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff-format
+        entry: pixi run python -m ruff format
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy
+        entry: pixi run python -m mypy .
+        language: system
+        types: [python]
+        pass_filenames: false
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+      - id: check-merge-conflict
