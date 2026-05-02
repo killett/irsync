@@ -489,6 +489,65 @@ class TestLockfile:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
+class TestCrossDeviceReplayHandled:
+    def test_5th_h2_xdev_returns_clean_error_no_partial_state_no_snapshot(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # NEW-H2 (5th-pass): when apply_moves's pre-flight detects that a
+        # planned move would cross filesystems on dest, run_backup must
+        # surface a clean non-zero exit code, leave dest untouched, AND
+        # NOT persist the new snapshot. Persisting would advance the
+        # baseline past the unfinished work and silently lose the diff
+        # the next run would have used to recover.
+        from irsync.replay import CrossDeviceMoveError
+
+        src, dest = src_dest
+        # Seed the baseline so the second run actually produces a diff.
+        run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        # Cause a rename on src so the next backup has at least one move
+        # to plan; otherwise apply_moves wouldn't be invoked.
+        target = next(p for p in src.rglob("*.bin") if p.is_file())
+        target.rename(src / "renamed_for_xdev_test.bin")
+
+        # Snapshot the source-side snapshot file's mtime so we can assert
+        # it isn't overwritten by the failed run.
+        snap_path = src / SNAPSHOT_FILENAME
+        snap_before = snap_path.read_bytes()
+
+        # Force the pre-flight to refuse, simulating a mount boundary inside dest.
+        def always_refuse(*, dir_moves, file_moves, dest_root):
+            raise CrossDeviceMoveError(18, "simulated EXDEV from pre-flight")
+
+        monkeypatch.setattr("irsync.backup.apply_moves", always_refuse)
+        # Capture rsync to make sure it doesn't run after the refusal.
+        rsync_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync",
+            lambda cmd: rsync_calls.append(cmd) or 0,
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc != 0, "xdev refusal must surface as a non-zero exit code"
+        assert rsync_calls == [], (
+            "rsync must not run after pre-flight refused the replay"
+        )
+        # Snapshot file unchanged — a future re-run with corrected dest
+        # config will diff against the same baseline as this run.
+        assert snap_path.read_bytes() == snap_before, (
+            "snapshot must NOT be persisted after a refused replay"
+        )
+
+
 class TestProvenanceMismatchRejected:
     def test_snapshot_from_different_tree_is_rejected(
         self, tmp_path, make_tree, basic_options, monkeypatch
@@ -554,6 +613,113 @@ class TestProvenanceMismatchRejected:
             k: v for k, v in tree_signature(dest_b).items() if k not in _INTERNAL_FILES
         }
         assert src_sig == dest_sig
+
+
+class TestSnapshotPersistedAfterRsyncSucceeds:
+    def test_5th_snapshot_not_persisted_when_rsync_fails(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # Verifies AD-equivalent: backup.py:401-406 guarantees that
+        # _persist_snapshots runs only after rsync returns 0. If rsync
+        # fails, the on-disk source-side snapshot must remain the OLD
+        # baseline so the next run can still reconcile correctly.
+        # Until this test, this behavior was claimed but unverified.
+        src, dest = src_dest
+        # First (successful) backup writes a baseline snapshot.
+        run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        snap_path = src / SNAPSHOT_FILENAME
+        baseline_bytes = snap_path.read_bytes()
+
+        # Make a change so the second run actually does work.
+        (src / "new_file.bin").write_bytes(b"new data")
+
+        # Force rsync to fail.
+        monkeypatch.setattr("irsync.backup.run_real_sync", lambda cmd: 23)
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc != 0, "failing rsync must propagate as non-zero"
+        # The snapshot file must NOT have been overwritten with the new
+        # rows (otherwise the next run would baseline against a snapshot
+        # that includes new_file.bin even though it was never backed up).
+        assert snap_path.read_bytes() == baseline_bytes, (
+            "source snapshot must NOT be persisted after rsync fails"
+        )
+
+
+class TestCycleBreakOrphanCleanup:
+    def test_5th_orphan_mvtmp_dir_removed_by_rsync_delete_before(
+        self, src_dest, basic_options
+    ):
+        # Verifies the architectural-decision-10 claim that orphan
+        # __mvtmp__ directories from a killed cycle-break replay are
+        # cleaned up by rsync's --delete-before on the next successful
+        # run (because they exist on dest but not on source). Until
+        # this test, this was claimed but unverified.
+        src, dest = src_dest
+        # Seed.
+        run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        # Plant an orphan __mvtmp__ directory and file on dest, as if a
+        # prior cycle-breaking apply_moves was killed mid-swap.
+        orphan_dir = dest / "leftover.__mvtmp__deadbeef"
+        orphan_dir.mkdir()
+        (orphan_dir / "stale.txt").write_text("from a killed prior run")
+        # Force a real backup (any change so rsync runs).
+        (src / "trigger.bin").write_bytes(b"trigger")
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert not orphan_dir.exists(), (
+            "rsync --delete-before must remove the orphan cycle-break dir "
+            "from dest because it has no counterpart on source"
+        )
+
+
+class TestNoSnapshotYesAuditability:
+    def test_5th_m1_no_snapshot_yes_prints_dry_run_preview_to_stdout(
+        self, src_dest, basic_options, monkeypatch, capsys
+    ):
+        # NEW-M1 (5th-pass): AD-7 says --yes preserves the preview as
+        # stdout so cron logs are auditable. The snapshot path honors this
+        # via _show_preview(..., interactive=not args.yes); the --no-snapshot
+        # path used to skip the preview entirely under --yes, leaving cron
+        # users with no record of what rsync was about to do.
+        src, dest = src_dest
+
+        dry_run_marker = "==SIMULATED DRY-RUN OUTPUT==\nfile1.txt\nfile2.txt\n"
+        monkeypatch.setattr("irsync.backup.run_dry_run", lambda cmd: dry_run_marker)
+        monkeypatch.setattr("irsync.backup.run_real_sync", lambda cmd: 0)
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(no_snapshot=True),
+        )
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert dry_run_marker in captured.out, (
+            "--no-snapshot --yes must print the dry-run preview to stdout "
+            "for cron auditability (AD-7)"
+        )
 
 
 class TestSnapshotOnly:

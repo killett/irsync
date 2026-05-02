@@ -21,6 +21,7 @@ class NodeInfo(TypedDict):
     nlink: int
     size: int
     mtime_ns: int
+    ctime_ns: int
     paths: set[str]
 
 
@@ -42,6 +43,7 @@ def index_by_inode(rows: Iterable[Row]) -> dict[tuple[int, int], NodeInfo]:
                 nlink=r["nlink"],
                 size=r["size"],
                 mtime_ns=r.get("mtime_ns", -1),
+                ctime_ns=r.get("ctime_ns", -1),
                 paths=set(),
             )
         idx[key]["paths"].add(r["path"])
@@ -175,17 +177,27 @@ def compute_moves(
         if len(bpaths) == 1 and len(apaths) == 1:
             (old_path,) = tuple(bpaths)
             (new_path,) = tuple(apaths)
-            # Defend against inode reuse: a kernel that hands out a freed inode
-            # number to a brand-new file would otherwise look identical to a
-            # rename. We only declare a move when size AND mtime_ns both agree.
-            # mtime_ns == -1 is a sentinel for snapshots written before this
-            # check existed; treat that as "unknown" and refuse the move so
-            # rsync handles it as create+delete (safe, just less efficient).
+            # Defend against inode reuse: a kernel that hands out a freed
+            # inode number to a brand-new file would otherwise look identical
+            # to a rename. We require size, mtime_ns, AND ctime_ns to all
+            # agree. ctime_ns is the NEW-H1 (5th-pass) NFS-safety tiebreaker:
+            # second-granular mtime + reused inode + matching-size collisions
+            # would pass the size+mtime gate alone, and rsync would then skip
+            # the file because metadata appears unchanged, leaving stale
+            # content on dest. ctime always ticks on inode allocation, so a
+            # reused inode reliably has a different ctime from the prior
+            # occupant. -1 sentinels (legacy snapshots without these fields)
+            # are treated as "unknown" → refuse the move (safe fallback;
+            # rsync re-transfers, just less efficient until the next snapshot
+            # has full metadata).
             if (
                 b["mtime_ns"] == -1
                 or a["mtime_ns"] == -1
+                or b["ctime_ns"] == -1
+                or a["ctime_ns"] == -1
                 or b["size"] != a["size"]
                 or b["mtime_ns"] != a["mtime_ns"]
+                or b["ctime_ns"] != a["ctime_ns"]
             ):
                 logging.debug(
                     "Inode %s path changed but size/mtime differ "

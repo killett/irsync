@@ -111,6 +111,15 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--ssh-port must be in 1..65535")
     if args.ssh_key is not None and not Path(args.ssh_key).expanduser().is_file():
         parser.error(f"--ssh-key file does not exist: {args.ssh_key}")
+    # NEW-M2 (5th-pass). --force only takes effect inside the snapshot diff
+    # branch (no-changes short-circuit + 50% deletion threshold). Combined
+    # with --no-snapshot it does nothing; reject upfront so the user notices
+    # rather than running with one of their flags silently ignored.
+    if args.force and args.no_snapshot:
+        parser.error(
+            "--force has no effect with --no-snapshot (the snapshot diff is "
+            "what --force overrides). Drop one of --force or --no-snapshot."
+        )
 
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,

@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from irsync.diff import make_parent_substituter, plan_directory_moves
+
+
+class CrossDeviceMoveError(OSError):
+    """Raised by the apply_moves pre-flight when a planned move would cross devices.
+
+    Subclass of :class:`OSError` (with ``errno = EXDEV``) so callers that already
+    handle generic OS errors keep working. The orchestrator catches this
+    explicitly to surface a clear message and avoid the perpetual-retry trap
+    where a mid-flight EXDEV would leave dest in partial state.
+    """
 
 
 @dataclass(frozen=True)
@@ -17,6 +28,60 @@ class ReplayResult:
     dirs_moved: int
     files_moved: int
     skipped: int
+
+
+def _dev_of(path: Path) -> int:
+    """Return ``st_dev`` of ``path`` or its deepest existing ancestor.
+
+    A planned move's new location may not exist yet; in that case the
+    filesystem boundary is still determined by the ancestor that does.
+    """
+    p = path
+    while True:
+        try:
+            return int(p.stat().st_dev)
+        except FileNotFoundError:
+            parent = p.parent
+            if parent == p:
+                raise
+            p = parent
+
+
+def _preflight_check_xdev(
+    dir_moves: list[tuple[str, str]],
+    file_moves: list[tuple[str, str]],
+    dest_root: Path,
+) -> None:
+    """Refuse upfront if any planned move would cross filesystems on dest.
+
+    ``apply_moves`` runs `os.rename` which fails with EXDEV across mounts.
+    Without this pre-flight, a mid-flight EXDEV would leave moves 1..k
+    applied and k+1..N pending, the orchestrator wouldn't persist the new
+    snapshot, and the next run would re-issue the same plan, hit the same
+    EXDEV at the same point, and never make forward progress (NEW-H2).
+    """
+    root_dev = _dev_of(dest_root)
+    checked: set[Path] = set()
+
+    def check(rel: str) -> None:
+        p = (dest_root / PurePosixPath(rel)).resolve(strict=False)
+        if p in checked:
+            return
+        checked.add(p)
+        try:
+            dev = _dev_of(p)
+        except FileNotFoundError:
+            return
+        if dev != root_dev:
+            raise CrossDeviceMoveError(
+                errno.EXDEV,
+                f"path {p} is on a different filesystem than dest_root {dest_root} "
+                f"(st_dev {dev} vs {root_dev})",
+            )
+
+    for old_rel, new_rel in (*dir_moves, *file_moves):
+        check(old_rel)
+        check(new_rel)
 
 
 def _move_no_clobber(src: Path, dst: Path) -> str:
@@ -68,9 +133,14 @@ def apply_moves(
         A :class:`ReplayResult` summarizing the outcome.
 
     Raises:
-        OSError: With ``errno == EXDEV`` if any rename would cross filesystems
-            (the destination tree must be a single filesystem).
+        CrossDeviceMoveError: When the pre-flight detects that any planned
+            move would cross filesystems on the destination. Raised before
+            any rename runs so dest is left untouched.
+        OSError: With ``errno == EXDEV`` if a rename unexpectedly crosses
+            filesystems (the destination tree must be a single filesystem).
     """
+    _preflight_check_xdev(dir_moves, file_moves, dest_root)
+
     dirs_moved = 0
     files_moved = 0
     skipped = 0

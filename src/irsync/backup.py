@@ -16,7 +16,7 @@ from pathlib import Path
 from irsync.diff import Changes, compute_changes
 from irsync.options import Endpoints, Options, resolve_endpoints
 from irsync.paths import with_trailing_slash
-from irsync.replay import apply_moves
+from irsync.replay import CrossDeviceMoveError, apply_moves
 from irsync.rsync_runner import build_rsync_command, run_dry_run, run_real_sync
 from irsync.snapshot import (
     LOCKFILE_NAME,
@@ -375,11 +375,26 @@ def _run_backup_for_endpoints(
 
     # Apply moves on dest tree first (only if we have a local dest and a diff).
     if changes is not None and dest_root is not None:
-        result = apply_moves(
-            dir_moves=changes.dir_moves,
-            file_moves=changes.file_moves,
-            dest_root=dest_root,
-        )
+        try:
+            result = apply_moves(
+                dir_moves=changes.dir_moves,
+                file_moves=changes.file_moves,
+                dest_root=dest_root,
+            )
+        except CrossDeviceMoveError as e:
+            # NEW-H2 (5th-pass). Refuse upfront so we don't leave dest in
+            # the partial state that would otherwise loop forever (next run
+            # would re-issue the same plan and hit the same EXDEV at the
+            # same point). Snapshot is intentionally NOT persisted so the
+            # corrected re-run still has the right baseline.
+            logging.error(
+                "Refusing to apply moves: dest tree spans multiple "
+                "filesystems (%s). Move every cross-FS path under one "
+                "filesystem, or pass --no-snapshot to skip the rename "
+                "optimization.",
+                e,
+            )
+            return 2
         logging.info(
             "Replay: %d dir moves applied, %d file moves applied, %d skipped.",
             result.dirs_moved,
@@ -414,6 +429,27 @@ def _run_rsync_only(
     options: Options,
     args: argparse.Namespace,
 ) -> int:
+    dry_cmd = build_rsync_command(
+        source=src_str,
+        dest=dest_str,
+        dry_run=True,
+        exclude_dirs=options.exclude_dirs,
+        no_exclude=args.no_exclude,
+        ssh_port=args.ssh_port,
+        ssh_key=args.ssh_key,
+    )
+    # NEW-M1 (5th-pass). Always run the dry-run so a preview exists. Under
+    # --yes (cron), print to stdout for auditability (AD-7); interactively,
+    # page through `less` and prompt for confirmation. Mirrors the snapshot
+    # path's _show_preview(..., interactive=not args.yes) behavior so the
+    # two code paths are consistent.
+    out = run_dry_run(dry_cmd)
+    if args.yes:
+        print(out)
+    else:
+        _page_output(out)
+        if not _confirm_or_abort(args):
+            return 130
     cmd = build_rsync_command(
         source=src_str,
         dest=dest_str,
@@ -423,20 +459,6 @@ def _run_rsync_only(
         ssh_port=args.ssh_port,
         ssh_key=args.ssh_key,
     )
-    if not args.yes:
-        dry_cmd = build_rsync_command(
-            source=src_str,
-            dest=dest_str,
-            dry_run=True,
-            exclude_dirs=options.exclude_dirs,
-            no_exclude=args.no_exclude,
-            ssh_port=args.ssh_port,
-            ssh_key=args.ssh_key,
-        )
-        out = run_dry_run(dry_cmd)
-        _page_output(out)
-        if not _confirm_or_abort(args):
-            return 130
     return run_real_sync(cmd)
 
 

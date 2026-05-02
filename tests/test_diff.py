@@ -9,7 +9,17 @@ from irsync.diff import (
 )
 
 
-def _row(*, dev=1, ino, type="f", nlink=1, size=0, path, mtime_ns=1_000_000_000):
+def _row(
+    *,
+    dev=1,
+    ino,
+    type="f",
+    nlink=1,
+    size=0,
+    path,
+    mtime_ns=1_000_000_000,
+    ctime_ns=1_000_000_000,
+):
     return {
         "dev": dev,
         "ino": ino,
@@ -18,6 +28,7 @@ def _row(*, dev=1, ino, type="f", nlink=1, size=0, path, mtime_ns=1_000_000_000)
         "size": size,
         "path": path,
         "mtime_ns": mtime_ns,
+        "ctime_ns": ctime_ns,
     }
 
 
@@ -103,6 +114,67 @@ class TestComputeMoves:
         # Pure rename: same inode, same size, same mtime_ns.
         before = [_row(ino=100, size=42, mtime_ns=1_500, path="before.txt")]
         after = [_row(ino=100, size=42, mtime_ns=1_500, path="after.txt")]
+        dir_moves, file_moves, _ = compute_moves(
+            index_by_inode(before), index_by_inode(after)
+        )
+        assert file_moves == [("before.txt", "after.txt")]
+
+    def test_5th_h1_inode_reuse_with_matching_size_and_mtime_blocked_by_ctime(self):
+        # NEW-H1 (5th-pass): the NFS data-loss scenario. Source on a network
+        # FS with second-granular mtime. Old file deleted; kernel reuses inode;
+        # new file at a different path with the SAME size and the SAME (rounded)
+        # mtime_ns. Without a third tiebreaker, compute_moves declares a move
+        # and rsync skips the file because size+mtime match — dest keeps the
+        # OLD content at the new path. ctime_ns differs (always ticks on inode
+        # allocation) and must catch this.
+        before = [
+            _row(
+                ino=100,
+                size=1000,
+                mtime_ns=1_234_567_890_000_000_000,  # second-aligned
+                ctime_ns=1_234_567_890_000_000_000,
+                path="A.txt",
+            )
+        ]
+        after = [
+            _row(
+                ino=100,
+                size=1000,
+                mtime_ns=1_234_567_890_000_000_000,  # same second
+                ctime_ns=1_234_567_891_500_000_000,  # ctime ticked on inode reuse
+                path="B.txt",
+            )
+        ]
+        dir_moves, file_moves, _ = compute_moves(
+            index_by_inode(before), index_by_inode(after)
+        )
+        assert file_moves == [], (
+            "ctime mismatch must block the false move (NFS inode-reuse defense)"
+        )
+
+    def test_5th_h1_legacy_snapshot_with_unknown_ctime_refuses_move(self):
+        # When the before snapshot was written by an older irsync (no ctime_ns,
+        # so it reads back as -1), compute_moves must conservatively refuse the
+        # move. rsync will re-transfer (one-time cost); the next snapshot has
+        # full ctime_ns and rename detection re-enables.
+        before = [_row(ino=110, size=42, mtime_ns=1_500, ctime_ns=-1, path="old.txt")]
+        after = [_row(ino=110, size=42, mtime_ns=1_500, ctime_ns=2_000, path="new.txt")]
+        dir_moves, file_moves, _ = compute_moves(
+            index_by_inode(before), index_by_inode(after)
+        )
+        assert file_moves == [], (
+            "unknown ctime on legacy snapshot must refuse the move (safe fallback)"
+        )
+
+    def test_5th_h1_genuine_rename_with_matching_ctime_still_a_move(self):
+        # Sanity: a real rename has matching size, mtime, AND ctime. The
+        # optimization survives.
+        before = [
+            _row(ino=120, size=42, mtime_ns=1_500, ctime_ns=1_500, path="before.txt")
+        ]
+        after = [
+            _row(ino=120, size=42, mtime_ns=1_500, ctime_ns=1_500, path="after.txt")
+        ]
         dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )

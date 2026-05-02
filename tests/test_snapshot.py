@@ -150,6 +150,37 @@ class TestWriteReadRoundtrip:
             read_jsonl(out)
 
 
+class TestCtimeField:
+    def test_5th_h1_snapshot_records_ctime_ns_per_row(self, tmp_path):
+        # NEW-H1 (5th-pass): ctime_ns is the inode-reuse tiebreaker. snapshot_tree
+        # must populate it for every row so compute_moves can require it to match
+        # before declaring a move (defends against NFS-style same-second mtime
+        # + reused inode + coincidentally matching size).
+        _build_tree(tmp_path)
+        rows = snapshot_tree(tmp_path)
+        for r in rows:
+            assert "ctime_ns" in r, f"row missing ctime_ns: {r}"
+            assert isinstance(r["ctime_ns"], int)
+            assert r["ctime_ns"] > 0
+
+    def test_5th_h1_legacy_snapshot_without_ctime_reads_back_with_sentinel(
+        self, tmp_path
+    ):
+        # Snapshots written before this change have no ctime_ns. read_snapshot
+        # must default missing fields to -1 (existing "unknown" sentinel) so
+        # compute_moves treats the inode conservatively and refuses to declare
+        # a move (rsync re-transfers; no data loss, just a one-time inefficiency).
+        out = tmp_path / "legacy.jsonl"
+        # Legacy row: dev/ino/type/nlink/size/mtime_ns/path, NO ctime_ns.
+        legacy_rows = (
+            '{"dev":1,"ino":10,"type":"f","nlink":1,"size":5,'
+            '"mtime_ns":1000,"path":"x.txt"}\n'
+        )
+        out.write_text(legacy_rows, encoding="utf-8")
+        rows = read_jsonl(out)
+        assert rows[0]["ctime_ns"] == -1
+
+
 class TestProvenanceHeader:
     def test_write_snapshot_adds_header_first_line(self, tmp_path):
         _build_tree(tmp_path)
