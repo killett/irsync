@@ -3,6 +3,9 @@ name = "irsync"
 requires-python = ">=3.12,<3.14"
 dependencies = []
 
+[tool.ruff]
+extend-exclude = ["srsync", "inode_compare.py", "make_random_moves.py", "make_random_tree.py"]
+
 [tool.ruff.lint]
 select = [
     "F",      # Pyflakes — unused imports, undefined names, etc.
@@ -38,6 +41,7 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 mypy_path = "src"
+exclude = ["^srsync$", "^inode_compare\\.py$", "^make_random_moves\\.py$", "^make_random_tree\\.py$"]
 
 # Uncomment when using rasterio or netCDF4:
 # [[tool.mypy.overrides]]
@@ -51,6 +55,9 @@ warn_return_any = false
 # Claude Opus 4.7 says: the test override has strict = false but that doesn't disable specific checks already enabled globally. So we also need to disable these individually:
 disallow_untyped_defs = false
 disallow_untyped_calls = false
+disallow_any_generics = false
+disallow_untyped_decorators = false
+check_untyped_defs = false
 
 [tool.pytest.ini_options]
 addopts = "-v"

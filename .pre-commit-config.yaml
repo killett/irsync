@@ -1,3 +1,5 @@
+exclude: '^(srsync|inode_compare\.py|make_random_moves\.py|make_random_tree\.py|inode_snapshot_.*\.jsonl|plan\.txt)$'
+
 repos:
   - repo: local
     hooks:  # On macOS, pixi-installed tools (pytest, ruff, mypy) can fail due to shebang path resolution issues. Using python -m <tool> bypasses this reliably.
