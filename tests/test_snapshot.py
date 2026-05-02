@@ -5,9 +5,12 @@ import pytest
 
 from irsync.snapshot import (
     SNAPSHOT_FILENAME,
+    SnapshotMismatch,
     read_jsonl,
+    read_snapshot,
     snapshot_tree,
     write_jsonl,
+    write_snapshot,
 )
 
 
@@ -103,3 +106,48 @@ class TestWriteReadRoundtrip:
         out.write_text('{"dev":1,"ino":2}\n', encoding="utf-8")
         with pytest.raises(SystemExit):
             read_jsonl(out)
+
+
+class TestProvenanceHeader:
+    def test_write_snapshot_adds_header_first_line(self, tmp_path):
+        _build_tree(tmp_path)
+        rows = snapshot_tree(tmp_path)
+        out = tmp_path.parent / "snap.jsonl"
+        write_snapshot(rows, source_root=tmp_path, out_file=out)
+        first = out.read_text(encoding="utf-8").splitlines()[0]
+        header = json.loads(first)
+        assert "_meta" in header
+        assert header["_meta"]["source_root"] == str(tmp_path.resolve())
+        assert header["_meta"]["irsync_version"]
+        assert header["_meta"]["created_at_utc"]
+
+    def test_read_snapshot_returns_header_and_rows(self, tmp_path):
+        _build_tree(tmp_path)
+        rows = snapshot_tree(tmp_path)
+        out = tmp_path.parent / "snap.jsonl"
+        write_snapshot(rows, source_root=tmp_path, out_file=out)
+        header, loaded = read_snapshot(out, expected_source_root=tmp_path)
+        assert header is not None
+        assert header["source_root"] == str(tmp_path.resolve())
+        assert loaded == rows
+
+    def test_read_snapshot_rejects_mismatched_source_root(self, tmp_path):
+        _build_tree(tmp_path)
+        rows = snapshot_tree(tmp_path)
+        out = tmp_path.parent / "snap.jsonl"
+        write_snapshot(rows, source_root=tmp_path, out_file=out)
+        wrong_root = tmp_path / "a"
+        with pytest.raises(SnapshotMismatch):
+            read_snapshot(out, expected_source_root=wrong_root)
+
+    def test_read_snapshot_on_legacy_headerless_file_returns_none_header(
+        self, tmp_path
+    ):
+        # Snapshots written before H3 had no header — they're a sequence of row objects.
+        _build_tree(tmp_path)
+        rows = snapshot_tree(tmp_path)
+        out = tmp_path.parent / "legacy.jsonl"
+        write_jsonl(rows, out)  # no header
+        header, loaded = read_snapshot(out, expected_source_root=tmp_path)
+        assert header is None
+        assert loaded == rows

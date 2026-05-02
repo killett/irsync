@@ -2,13 +2,28 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import stat
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Literal, TypedDict
 
+from irsync import __version__
+
 SNAPSHOT_FILENAME: str = ".irsync_snapshot.jsonl"
+
+
+class SnapshotMismatch(Exception):
+    """Raised when a snapshot's recorded source root doesn't match the caller's."""
+
+
+class Header(TypedDict):
+    """Provenance metadata stored as the first line of a snapshot file."""
+
+    source_root: str
+    irsync_version: str
+    created_at_utc: str
 
 
 class Row(TypedDict):
@@ -19,6 +34,7 @@ class Row(TypedDict):
     type: Literal["f", "d", "l", "o"]
     nlink: int
     size: int
+    mtime_ns: int  # st_mtime_ns; combined with size, defends against inode reuse
     path: str  # POSIX relative path from snapshot root
 
 
@@ -101,6 +117,7 @@ def snapshot_tree(
                         type=ftype,
                         nlink=int(st.st_nlink),
                         size=int(st.st_size),
+                        mtime_ns=int(st.st_mtime_ns),
                         path=rel,
                     )
                 )
@@ -115,6 +132,7 @@ def snapshot_tree(
             type="d",
             nlink=int(st_root.st_nlink),
             size=int(st_root.st_size),
+            mtime_ns=int(st_root.st_mtime_ns),
             path=".",
         )
     )
@@ -137,6 +155,102 @@ def write_jsonl(rows: Iterable[Row], out_file: Path) -> None:
         for r in rows:
             f.write(json.dumps(r, separators=(",", ":"), ensure_ascii=False))
             f.write("\n")
+
+
+def write_snapshot(
+    rows: Iterable[Row],
+    *,
+    source_root: Path,
+    out_file: Path,
+) -> None:
+    """Write a snapshot with a provenance header line followed by row lines.
+
+    The header records the resolved source root, irsync version, and a UTC
+    timestamp so a stale snapshot from a different tree can be rejected
+    before being used as a diff baseline.
+
+    Args:
+        rows: Snapshot rows.
+        source_root: The directory the snapshot covers; resolved to absolute.
+        out_file: Destination path; parent must exist.
+    """
+    header: dict[str, Header] = {
+        "_meta": Header(
+            source_root=str(source_root.resolve()),
+            irsync_version=__version__,
+            created_at_utc=dt.datetime.now(dt.UTC).isoformat(),
+        )
+    }
+    with out_file.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(header, separators=(",", ":"), ensure_ascii=False))
+        f.write("\n")
+        for r in rows:
+            f.write(json.dumps(r, separators=(",", ":"), ensure_ascii=False))
+            f.write("\n")
+
+
+def read_snapshot(
+    file: Path,
+    *,
+    expected_source_root: Path,
+) -> tuple[Header | None, list[Row]]:
+    """Read a snapshot file written by :func:`write_snapshot`.
+
+    If the first line is a header object (``{"_meta": ...}``), it is parsed
+    and validated against ``expected_source_root``. A header from a
+    different source tree raises :class:`SnapshotMismatch` so the caller
+    can refuse to use it as a diff baseline. Files without a header (legacy
+    format) return ``None`` for the header and are otherwise read as rows.
+
+    Args:
+        file: Snapshot file path.
+        expected_source_root: The current source root; the header's
+            ``source_root`` must match this when present.
+
+    Returns:
+        ``(header_or_none, rows)``.
+
+    Raises:
+        SnapshotMismatch: If the header's source root doesn't match.
+        SystemExit: If a row is malformed.
+    """
+    text = file.read_text(encoding="utf-8")
+    lines = [ln for ln in text.split("\n") if ln.strip()]
+    if not lines:
+        return None, []
+
+    header: Header | None = None
+    first = json.loads(lines[0])
+    if isinstance(first, dict) and "_meta" in first:
+        meta = first["_meta"]
+        header = Header(
+            source_root=meta.get("source_root", ""),
+            irsync_version=meta.get("irsync_version", ""),
+            created_at_utc=meta.get("created_at_utc", ""),
+        )
+        expected = str(expected_source_root.resolve())
+        if header["source_root"] != expected:
+            raise SnapshotMismatch(
+                f"Snapshot at {file} was taken of {header['source_root']!r}, "
+                f"but the current source root is {expected!r}. Refusing to use it "
+                "as a diff baseline."
+            )
+        data_lines = lines[1:]
+    else:
+        data_lines = lines
+
+    rows: list[Row] = []
+    for ln, line in enumerate(data_lines, 1):
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"Malformed JSONL at {file}:{ln}: {e}") from e
+        for k in ("dev", "ino", "type", "nlink", "size", "path"):
+            if k not in obj:
+                raise SystemExit(f"Missing key '{k}' in {file}:{ln}")
+        obj.setdefault("mtime_ns", -1)
+        rows.append(obj)
+    return header, rows
 
 
 def read_jsonl(file: Path) -> list[Row]:
@@ -165,5 +279,9 @@ def read_jsonl(file: Path) -> list[Row]:
             for k in ("dev", "ino", "type", "nlink", "size", "path"):
                 if k not in obj:
                     raise SystemExit(f"Missing key '{k}' in {file}:{ln}")
+            # mtime_ns was added later; tolerate snapshots written by older
+            # versions by defaulting to a sentinel (-1) that compute_moves
+            # interprets as "unknown — refuse to declare a move".
+            obj.setdefault("mtime_ns", -1)
             out.append(obj)
     return out

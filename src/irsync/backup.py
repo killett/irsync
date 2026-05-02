@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import logging
 import os
 import shutil
 import subprocess  # noqa: S404 — needed for paging via less
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 from irsync.diff import Changes, compute_changes
@@ -18,20 +21,58 @@ from irsync.rsync_runner import build_rsync_command, run_dry_run, run_real_sync
 from irsync.snapshot import (
     SNAPSHOT_FILENAME,
     Row,
-    read_jsonl,
+    SnapshotMismatch,
+    read_snapshot,
     snapshot_tree,
-    write_jsonl,
+    write_snapshot,
 )
 
+LOCKFILE_NAME: str = ".irsync.lock"
 
-def _atomic_write_jsonl(rows: list[Row], target: Path) -> None:
-    """Write rows to a JSONL file atomically (tempfile + replace)."""
+# Refuse to proceed when the diff says this fraction of the previously-recorded
+# tree is gone — almost always a swapped-args / wrong-snapshot accident.
+CATASTROPHIC_DELETE_RATIO: float = 0.5
+
+
+@contextlib.contextmanager
+def _source_lock(src_root: Path) -> Iterator[None]:
+    """Hold an exclusive flock on ``<src_root>/.irsync.lock`` for the duration.
+
+    Two concurrent irsync runs against the same source would otherwise race
+    on snapshot read/write and apply_moves. This is non-blocking: if the lock
+    is held, raise BlockingIOError immediately so the caller can exit cleanly
+    rather than wait indefinitely.
+    """
+    src_root.mkdir(parents=True, exist_ok=True)
+    lock_path = src_root / LOCKFILE_NAME
+    f = lock_path.open("w")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        f.close()
+        raise
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        f.close()
+
+
+def _atomic_write_snapshot(rows: list[Row], source_root: Path, target: Path) -> None:
+    """Write rows + provenance header to ``target`` atomically (tempfile + replace).
+
+    The provenance header records ``source_root`` so a later run that finds a
+    snapshot from a different tree at the source root can refuse to use it.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmpname = tempfile.mkstemp(prefix=".irsync-snap-", dir=target.parent)
     os.close(fd)
     tmp_path = Path(tmpname)
     try:
-        write_jsonl(rows, tmp_path)
+        write_snapshot(rows, source_root=source_root, out_file=tmp_path)
         os.replace(tmp_path, target)
     except Exception:
         tmp_path.unlink(missing_ok=True)
@@ -40,21 +81,47 @@ def _atomic_write_jsonl(rows: list[Row], target: Path) -> None:
 
 def _persist_snapshots(rows: list[Row], src_root: Path, dest_root: Path | None) -> None:
     """Write the fresh snapshot to the source root and (if local) the dest root."""
-    _atomic_write_jsonl(rows, src_root / SNAPSHOT_FILENAME)
+    _atomic_write_snapshot(rows, src_root, src_root / SNAPSHOT_FILENAME)
     if dest_root is not None:
-        _atomic_write_jsonl(rows, dest_root / SNAPSHOT_FILENAME)
+        _atomic_write_snapshot(rows, src_root, dest_root / SNAPSHOT_FILENAME)
 
 
-def _show_preview(changes: Changes) -> None:
-    """Print a human-readable summary of what irsync is about to do."""
-    print(f"Directory moves: {len(changes.dir_moves)}")
+def _format_preview(changes: Changes) -> str:
+    """Build the full pre-confirmation preview text — every move, deletion, creation.
+
+    The deletion list is the safety-critical part: rsync's ``--delete-before`` will
+    remove these from the backup tree, so the user must see the actual paths (not
+    just a count) before saying yes.
+    """
+    lines: list[str] = []
+    lines.append(f"=== Directory moves ({len(changes.dir_moves)}) ===")
     for o, n in changes.dir_moves:
-        print(f"  {o!s}  ->  {n!s}")
-    print(f"File moves:      {len(changes.file_moves)}")
+        lines.append(f"  {o}  ->  {n}")
+    lines.append(f"=== File moves ({len(changes.file_moves)}) ===")
     for o, n in changes.file_moves:
-        print(f"  {o!s}  ->  {n!s}")
-    print(f"Created entries: {len(changes.created)}")
-    print(f"Deleted entries: {len(changes.deleted)}")
+        lines.append(f"  {o}  ->  {n}")
+    lines.append(
+        f"=== Created on source, will be transferred ({len(changes.created)}) ==="
+    )
+    for p in changes.created:
+        lines.append(f"  + {p}")
+    lines.append(
+        f"=== Deleted on source, will be REMOVED FROM BACKUP ({len(changes.deleted)}) ==="
+    )
+    for p in changes.deleted:
+        lines.append(f"  - {p}")
+    return "\n".join(lines) + "\n"
+
+
+def _show_preview(changes: Changes, *, interactive: bool) -> None:
+    """Render the preview, paging through ``less`` if interactive."""
+    text = _format_preview(changes)
+    if interactive:
+        _page_output(text)
+    else:
+        # Non-interactive (--yes): still log it so the run is auditable, but
+        # don't bother with the pager.
+        print(text)
 
 
 def _confirm_or_abort(args: argparse.Namespace) -> bool:
@@ -83,8 +150,59 @@ def run_backup(
     Returns:
         0 on success (or when there was no work to do), non-zero on error.
     """
+    # --snapshot-only doesn't need a destination at all — it just records the
+    # current state of the source for use as a future baseline. Route around
+    # resolve_endpoints so the user can snapshot any local directory without
+    # having to invent a dest argument.
+    if args.snapshot_only and not destination_arg:
+        return _run_snapshot_only(source_arg=source_arg, options=options)
+
     endpoints = resolve_endpoints(source_arg, destination_arg, options)
-    return _run_backup_for_endpoints(endpoints=endpoints, options=options, args=args)
+    src_root = endpoints.source if isinstance(endpoints.source, Path) else None
+    if src_root is None:
+        # Remote source: nowhere to put the lock. Skip the lock and let
+        # rsync's own protocol coordinate with the remote.
+        return _run_backup_for_endpoints(
+            endpoints=endpoints, options=options, args=args
+        )
+    try:
+        with _source_lock(src_root):
+            return _run_backup_for_endpoints(
+                endpoints=endpoints, options=options, args=args
+            )
+    except BlockingIOError:
+        logging.error(
+            "Another irsync run is already in progress against %s "
+            "(lock %s is held). Refusing to race.",
+            src_root,
+            src_root / LOCKFILE_NAME,
+        )
+        return 75  # EX_TEMPFAIL — try again later
+
+
+def _run_snapshot_only(*, source_arg: str, options: Options) -> int:
+    """Take a snapshot of ``source_arg`` and write it next to the source. No dest."""
+    from irsync.paths import ensure_local_dir
+
+    # Resolve drive-letter / ~ / mypython shortcuts manually so the shorthand
+    # still works without requiring a dest.
+    arg = source_arg.strip()
+    src: Path
+    if len(arg) == 1 and arg.isalpha():
+        src = ensure_local_dir(options.base_dir / arg.upper())
+    elif arg == "~":
+        src = ensure_local_dir(options.homedir)
+    elif arg == "mypython":
+        src = ensure_local_dir(options.python_dir)
+    else:
+        src = ensure_local_dir(arg)
+
+    rows = snapshot_tree(src)
+    _atomic_write_snapshot(rows, src, src / SNAPSHOT_FILENAME)
+    logging.info(
+        "Snapshot-only: wrote %d rows to %s", len(rows), src / SNAPSHOT_FILENAME
+    )
+    return 0
 
 
 def _run_backup_for_endpoints(
@@ -112,7 +230,7 @@ def _run_backup_for_endpoints(
             logging.error("--snapshot-only requires a local source.")
             return 2
         rows = snapshot_tree(src_root)
-        _atomic_write_jsonl(rows, src_root / SNAPSHOT_FILENAME)
+        _atomic_write_snapshot(rows, src_root, src_root / SNAPSHOT_FILENAME)
         logging.info(
             "Snapshot-only: wrote %d rows to %s",
             len(rows),
@@ -133,8 +251,26 @@ def _run_backup_for_endpoints(
 
     before_path = src_root / SNAPSHOT_FILENAME
     changes: Changes | None = None
+    before_rows: list[Row] = []
+    have_before = False
     if before_path.exists():
-        before_rows = read_jsonl(before_path)
+        try:
+            _header, before_rows = read_snapshot(
+                before_path, expected_source_root=src_root
+            )
+            have_before = True
+        except SnapshotMismatch as e:
+            logging.warning(
+                "Existing snapshot at %s does not match source root %s: %s. "
+                "Treating as first backup; rsync will reconcile.",
+                before_path,
+                src_root,
+                e,
+            )
+    else:
+        logging.info("No prior snapshot; treating as first backup.")
+
+    if have_before:
         changes = compute_changes(before_rows, fresh_rows)
         logging.info(
             "Diff: %d dir moves, %d file moves, %d created, %d deleted.",
@@ -146,12 +282,28 @@ def _run_backup_for_endpoints(
         if not changes.any_changes() and not args.force:
             logging.info("No source changes since last backup; backup drive untouched.")
             return 0
-    else:
-        logging.info("No prior snapshot; treating as first backup.")
+        # Sanity check: a diff that says >50% of the previous tree is gone
+        # is almost certainly a wrong-source / stale-snapshot / swapped-args
+        # accident. Refuse unless the user explicitly opts in with --force.
+        if before_rows and not args.force:
+            ratio = len(changes.deleted) / len(before_rows)
+            if ratio > CATASTROPHIC_DELETE_RATIO:
+                logging.error(
+                    "Refusing: diff would delete %d of %d previously-recorded "
+                    "entries (%.0f%%). This usually means the source tree has "
+                    "been swapped, the snapshot is from a different tree, or "
+                    "args were reversed. Pass --force to override.",
+                    len(changes.deleted),
+                    len(before_rows),
+                    ratio * 100,
+                )
+                return 2
 
-    # Show preview unless --yes (the preview is for the human to inspect deletions).
+    # Always show the preview before confirming. In interactive mode, page it
+    # through less so the user can scroll through the deletion list. In --yes
+    # mode, dump it once so the run is at least auditable in scrollback / logs.
     if changes is not None:
-        _show_preview(changes)
+        _show_preview(changes, interactive=not args.yes)
     if not _confirm_or_abort(args):
         logging.info("Aborted by user.")
         return 130

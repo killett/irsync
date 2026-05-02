@@ -29,14 +29,18 @@ class TestBuildRsyncCommand:
         cmd = build_rsync_command(source="/src/", dest="/dst/", dry_run=False)
         assert "--dry-run" not in cmd
 
-    def test_excludes_snapshot_file_always(self):
+    def test_excludes_snapshot_file_anchored_to_root(self):
+        # The exclude pattern MUST be anchored with a leading slash so that
+        # a user file named .irsync_snapshot.jsonl in a subdirectory still
+        # gets backed up. Without the anchor, rsync matches the basename
+        # at every level.
         cmd = build_rsync_command(source="/src/", dest="/dst/", dry_run=False)
-        i = cmd.index("--exclude")
-        # Find the one whose value is the snapshot filename
-        assert ".irsync_snapshot.jsonl" in cmd[i + 1 : i + 2] or any(
-            cmd[j + 1] == ".irsync_snapshot.jsonl"
-            for j, x in enumerate(cmd)
-            if x == "--exclude"
+        excluded = [cmd[j + 1] for j, x in enumerate(cmd[:-1]) if x == "--exclude"]
+        assert "/.irsync_snapshot.jsonl" in excluded, (
+            f"snapshot exclude must be anchored to root; got {excluded!r}"
+        )
+        assert ".irsync_snapshot.jsonl" not in excluded, (
+            "unanchored .irsync_snapshot.jsonl exclude would skip subdir files of that name"
         )
 
     def test_user_excludes_added(self):

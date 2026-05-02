@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
@@ -19,6 +20,7 @@ class NodeInfo(TypedDict):
     type: str
     nlink: int
     size: int
+    mtime_ns: int
     paths: set[str]
 
 
@@ -36,7 +38,11 @@ def index_by_inode(rows: Iterable[Row]) -> dict[tuple[int, int], NodeInfo]:
         key = (r["dev"], r["ino"])
         if key not in idx:
             idx[key] = NodeInfo(
-                type=r["type"], nlink=r["nlink"], size=r["size"], paths=set()
+                type=r["type"],
+                nlink=r["nlink"],
+                size=r["size"],
+                mtime_ns=r.get("mtime_ns", -1),
+                paths=set(),
             )
         idx[key]["paths"].add(r["path"])
     return idx
@@ -164,6 +170,26 @@ def compute_moves(
         if len(bpaths) == 1 and len(apaths) == 1:
             (old_path,) = tuple(bpaths)
             (new_path,) = tuple(apaths)
+            # Defend against inode reuse: a kernel that hands out a freed inode
+            # number to a brand-new file would otherwise look identical to a
+            # rename. We only declare a move when size AND mtime_ns both agree.
+            # mtime_ns == -1 is a sentinel for snapshots written before this
+            # check existed; treat that as "unknown" and refuse the move so
+            # rsync handles it as create+delete (safe, just less efficient).
+            if (
+                b["mtime_ns"] == -1
+                or a["mtime_ns"] == -1
+                or b["size"] != a["size"]
+                or b["mtime_ns"] != a["mtime_ns"]
+            ):
+                logging.debug(
+                    "Inode %s path changed but size/mtime differ "
+                    "(possible inode reuse); not treating as a move: %s -> %s",
+                    key,
+                    old_path,
+                    new_path,
+                )
+                continue
             if b["type"] == "d":
                 dir_moves.append((old_path, new_path))
             else:
@@ -200,13 +226,14 @@ def plan_directory_moves(dir_moves: list[tuple[str, str]]) -> list[tuple[str, st
     temp_moves: list[tuple[str, str, str]] = []
 
     def temp_name_for(p: str) -> str:
-        i = 0
+        # Use a random suffix so a real file at the same path on the destination
+        # tree (e.g. a backup of in-progress work whose author happened to use
+        # this exact suffix) won't collide with a cycle-breaking temp move.
+        # 8 hex chars = 32 bits of entropy; collision probability vanishes.
         while True:
-            suffix = f".__mvtmp__{i}" if i else ".__mvtmp__"
-            candidate = f"{p}{suffix}"
+            candidate = f"{p}.__mvtmp__{secrets.token_hex(4)}"
             if candidate not in old_set and candidate not in move_map.values():
                 return candidate
-            i += 1
 
     def dfs(u: str) -> None:
         color[u] = 1

@@ -9,7 +9,7 @@ from irsync.diff import (
 )
 
 
-def _row(*, dev=1, ino, type="f", nlink=1, size=0, path):
+def _row(*, dev=1, ino, type="f", nlink=1, size=0, path, mtime_ns=1_000_000_000):
     return {
         "dev": dev,
         "ino": ino,
@@ -17,6 +17,7 @@ def _row(*, dev=1, ino, type="f", nlink=1, size=0, path):
         "nlink": nlink,
         "size": size,
         "path": path,
+        "mtime_ns": mtime_ns,
     }
 
 
@@ -75,6 +76,38 @@ class TestComputeMoves:
         )
         assert dir_moves == [] and file_moves == []
 
+    def test_inode_reuse_with_different_size_not_a_move(self):
+        # Inode 100 was 'old.txt' (size 50). Source FS reused inode 100 for
+        # 'unrelated.bin' (size 999) after old.txt was deleted. This MUST NOT
+        # be reported as a move; doing so would cause apply_moves to clobber
+        # the legitimate dest file at the new path.
+        before = [_row(ino=100, size=50, mtime_ns=1_000, path="old.txt")]
+        after = [_row(ino=100, size=999, mtime_ns=2_000, path="unrelated.bin")]
+        dir_moves, file_moves = compute_moves(
+            index_by_inode(before), index_by_inode(after)
+        )
+        assert file_moves == [], (
+            f"inode reuse must not produce a move; got {file_moves!r}"
+        )
+
+    def test_inode_reuse_with_same_size_but_different_mtime_not_a_move(self):
+        # Same size by coincidence; mtime differs → not a move.
+        before = [_row(ino=100, size=42, mtime_ns=1_000, path="old.txt")]
+        after = [_row(ino=100, size=42, mtime_ns=2_000, path="other.txt")]
+        dir_moves, file_moves = compute_moves(
+            index_by_inode(before), index_by_inode(after)
+        )
+        assert file_moves == [], "same size but different mtime should not be a move"
+
+    def test_genuine_rename_same_size_same_mtime_is_a_move(self):
+        # Pure rename: same inode, same size, same mtime_ns.
+        before = [_row(ino=100, size=42, mtime_ns=1_500, path="before.txt")]
+        after = [_row(ino=100, size=42, mtime_ns=1_500, path="after.txt")]
+        dir_moves, file_moves = compute_moves(
+            index_by_inode(before), index_by_inode(after)
+        )
+        assert file_moves == [("before.txt", "after.txt")]
+
     def test_hardlinks_skipped_by_default(self):
         before = [_row(ino=50, nlink=2, path="a"), _row(ino=50, nlink=2, path="link")]
         after = [_row(ino=50, nlink=2, path="b"), _row(ino=50, nlink=2, path="link")]
@@ -119,6 +152,28 @@ class TestPlanDirectoryMoves:
             names.remove(src)
             names.add(dst)
         assert names == {"a", "b"}
+
+    def test_temp_name_uses_random_suffix(self):
+        # H5 regression: the cycle-breaking temp name must be unpredictable so it
+        # can't collide with a real file on the destination tree (e.g. a backup
+        # of in-progress work that happens to contain '<dir>.__mvtmp__'). Two
+        # planner runs over the same swap should produce different temp names.
+        import re
+
+        runs = [plan_directory_moves([("a", "b"), ("b", "a")]) for _ in range(20)]
+        # Extract the temp-suffixed name from each run
+        temp_pat = re.compile(r"\.__mvtmp__([0-9a-f]{8,})")
+        suffixes = set()
+        for ordered in runs:
+            for src, dst in ordered:
+                m = temp_pat.search(src) or temp_pat.search(dst)
+                if m:
+                    suffixes.add(m.group(1))
+                    break
+        assert len(suffixes) > 1, (
+            f"temp suffix must be randomized to avoid dest-tree collisions; "
+            f"got only {len(suffixes)} unique suffix(es) across 20 runs"
+        )
 
 
 class TestComputeChanges:

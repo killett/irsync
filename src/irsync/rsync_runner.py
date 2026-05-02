@@ -69,7 +69,10 @@ def build_rsync_command(
             ssh_cmd += f" -i {shlex.quote(os.fspath(ssh_key))}"
         cmd.extend(["-e", ssh_cmd])
 
-    cmd.extend(["--exclude", SNAPSHOT_FILENAME])
+    # Anchor with leading "/" so only the snapshot at the source root is excluded;
+    # without the anchor, rsync's pattern matches the basename at every depth and
+    # would silently skip user files that happen to share the name.
+    cmd.extend(["--exclude", f"/{SNAPSHOT_FILENAME}"])
 
     if not no_exclude and exclude_dirs:
         for d in exclude_dirs:
