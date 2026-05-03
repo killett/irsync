@@ -4,7 +4,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = []
 
 [tool.ruff]
-extend-exclude = ["srsync", "inode_compare.py", "make_random_moves.py", "make_random_tree.py"]
+extend-exclude = ["srsync", "inode_compare.py", "make_random_moves.py", "make_random_tree.py", "univ_defs.py"]
 
 [tool.ruff.lint]
 select = [
@@ -41,7 +41,7 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 mypy_path = "src"
-exclude = ["^srsync$", "^inode_compare\\.py$", "^make_random_moves\\.py$", "^make_random_tree\\.py$"]
+exclude = ["^srsync$", "^inode_compare\\.py$", "^make_random_moves\\.py$", "^make_random_tree\\.py$", "^univ_defs\\.py$"]
 
 # Uncomment when using rasterio or netCDF4:
 # [[tool.mypy.overrides]]

@@ -150,35 +150,38 @@ class TestWriteReadRoundtrip:
             read_jsonl(out)
 
 
-class TestCtimeField:
-    def test_5th_h1_snapshot_records_ctime_ns_per_row(self, tmp_path):
-        # NEW-H1 (5th-pass): ctime_ns is the inode-reuse tiebreaker. snapshot_tree
-        # must populate it for every row so compute_moves can require it to match
-        # before declaring a move (defends against NFS-style same-second mtime
-        # + reused inode + coincidentally matching size).
+class TestBtimeField:
+    def test_5th_h1_snapshot_records_btime_ns_per_row(self, tmp_path):
+        # NEW-H1 (5th-pass, take 2): btime_ns is the inode-reuse tiebreaker
+        # — set when the inode is allocated, never updated by rename. The
+        # snapshot must populate it via statx so compute_moves can require
+        # it to match before declaring a move. On filesystems that don't
+        # report btime, snapshot_tree records -1; that disables the
+        # tiebreaker without breaking the rest of the diff.
         _build_tree(tmp_path)
         rows = snapshot_tree(tmp_path)
         for r in rows:
-            assert "ctime_ns" in r, f"row missing ctime_ns: {r}"
-            assert isinstance(r["ctime_ns"], int)
-            assert r["ctime_ns"] > 0
+            assert "btime_ns" in r, f"row missing btime_ns: {r}"
+            assert isinstance(r["btime_ns"], int)
+            # Either FS supports btime (positive ns since epoch) or doesn't (-1).
+            assert r["btime_ns"] > 0 or r["btime_ns"] == -1
 
-    def test_5th_h1_legacy_snapshot_without_ctime_reads_back_with_sentinel(
+    def test_5th_h1_legacy_snapshot_without_btime_reads_back_with_sentinel(
         self, tmp_path
     ):
-        # Snapshots written before this change have no ctime_ns. read_snapshot
-        # must default missing fields to -1 (existing "unknown" sentinel) so
-        # compute_moves treats the inode conservatively and refuses to declare
-        # a move (rsync re-transfers; no data loss, just a one-time inefficiency).
+        # Snapshots written before this change have no btime_ns. read_jsonl
+        # must default missing field to -1 so compute_moves falls back to
+        # the size+mtime-only gate (no NFS defense for these legacy
+        # snapshots, but no rename-optimization regression either).
         out = tmp_path / "legacy.jsonl"
-        # Legacy row: dev/ino/type/nlink/size/mtime_ns/path, NO ctime_ns.
+        # Legacy row: dev/ino/type/nlink/size/mtime_ns/path, NO btime_ns.
         legacy_rows = (
             '{"dev":1,"ino":10,"type":"f","nlink":1,"size":5,'
             '"mtime_ns":1000,"path":"x.txt"}\n'
         )
         out.write_text(legacy_rows, encoding="utf-8")
         rows = read_jsonl(out)
-        assert rows[0]["ctime_ns"] == -1
+        assert rows[0]["btime_ns"] == -1
 
 
 class TestProvenanceHeader:

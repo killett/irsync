@@ -18,7 +18,7 @@ def _row(
     size=0,
     path,
     mtime_ns=1_000_000_000,
-    ctime_ns=1_000_000_000,
+    btime_ns=1_000_000_000,
 ):
     return {
         "dev": dev,
@@ -28,7 +28,7 @@ def _row(
         "size": size,
         "path": path,
         "mtime_ns": mtime_ns,
-        "ctime_ns": ctime_ns,
+        "btime_ns": btime_ns,
     }
 
 
@@ -119,20 +119,18 @@ class TestComputeMoves:
         )
         assert file_moves == [("before.txt", "after.txt")]
 
-    def test_5th_h1_inode_reuse_with_matching_size_and_mtime_blocked_by_ctime(self):
-        # NEW-H1 (5th-pass): the NFS data-loss scenario. Source on a network
-        # FS with second-granular mtime. Old file deleted; kernel reuses inode;
-        # new file at a different path with the SAME size and the SAME (rounded)
-        # mtime_ns. Without a third tiebreaker, compute_moves declares a move
-        # and rsync skips the file because size+mtime match — dest keeps the
-        # OLD content at the new path. ctime_ns differs (always ticks on inode
-        # allocation) and must catch this.
+    def test_5th_h1_inode_reuse_with_matching_size_and_mtime_blocked_by_btime(self):
+        # NEW-H1 (5th-pass, take 2): the NFS data-loss scenario. Source on
+        # a network FS with second-granular mtime. Old file deleted; kernel
+        # reuses inode; new file at a different path with the SAME size and
+        # the SAME (rounded) mtime_ns. The btime tiebreaker catches it
+        # because a freshly-allocated inode always has a fresh btime.
         before = [
             _row(
                 ino=100,
                 size=1000,
                 mtime_ns=1_234_567_890_000_000_000,  # second-aligned
-                ctime_ns=1_234_567_890_000_000_000,
+                btime_ns=1_234_567_800_000_000_000,  # original allocation time
                 path="A.txt",
             )
         ]
@@ -141,7 +139,7 @@ class TestComputeMoves:
                 ino=100,
                 size=1000,
                 mtime_ns=1_234_567_890_000_000_000,  # same second
-                ctime_ns=1_234_567_891_500_000_000,  # ctime ticked on inode reuse
+                btime_ns=1_234_567_890_500_000_000,  # newly allocated
                 path="B.txt",
             )
         ]
@@ -149,36 +147,53 @@ class TestComputeMoves:
             index_by_inode(before), index_by_inode(after)
         )
         assert file_moves == [], (
-            "ctime mismatch must block the false move (NFS inode-reuse defense)"
+            "btime mismatch must block the false move (NFS inode-reuse defense)"
         )
 
-    def test_5th_h1_legacy_snapshot_with_unknown_ctime_refuses_move(self):
-        # When the before snapshot was written by an older irsync (no ctime_ns,
-        # so it reads back as -1), compute_moves must conservatively refuse the
-        # move. rsync will re-transfer (one-time cost); the next snapshot has
-        # full ctime_ns and rename detection re-enables.
-        before = [_row(ino=110, size=42, mtime_ns=1_500, ctime_ns=-1, path="old.txt")]
-        after = [_row(ino=110, size=42, mtime_ns=1_500, ctime_ns=2_000, path="new.txt")]
+    def test_5th_h1_legacy_snapshot_without_btime_falls_back_to_size_mtime_gate(self):
+        # When EITHER snapshot lacks btime (legacy snapshots, or filesystems
+        # like NFSv3/FAT/older-ext4 that don't expose statx btime), the gate
+        # falls back to size + mtime alone. A genuine rename with matching
+        # size + mtime is still optimized; the NFS inode-reuse hole is
+        # documented in the README for these filesystems.
+        before = [_row(ino=110, size=42, mtime_ns=1_500, btime_ns=-1, path="old.txt")]
+        after = [_row(ino=110, size=42, mtime_ns=1_500, btime_ns=2_000, path="new.txt")]
         dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )
-        assert file_moves == [], (
-            "unknown ctime on legacy snapshot must refuse the move (safe fallback)"
+        assert file_moves == [("old.txt", "new.txt")], (
+            "missing btime on either side must not block a size+mtime-clean move"
         )
 
-    def test_5th_h1_genuine_rename_with_matching_ctime_still_a_move(self):
-        # Sanity: a real rename has matching size, mtime, AND ctime. The
+    def test_5th_h1_genuine_rename_with_matching_btime_still_a_move(self):
+        # Sanity: a real rename preserves size, mtime, AND btime. The
         # optimization survives.
         before = [
-            _row(ino=120, size=42, mtime_ns=1_500, ctime_ns=1_500, path="before.txt")
+            _row(ino=120, size=42, mtime_ns=1_500, btime_ns=1_000, path="before.txt")
         ]
         after = [
-            _row(ino=120, size=42, mtime_ns=1_500, ctime_ns=1_500, path="after.txt")
+            _row(ino=120, size=42, mtime_ns=1_500, btime_ns=1_000, path="after.txt")
         ]
         dir_moves, file_moves, _ = compute_moves(
             index_by_inode(before), index_by_inode(after)
         )
         assert file_moves == [("before.txt", "after.txt")]
+
+    def test_5th_h1_cross_clock_tick_rename_still_optimized(self):
+        # Regression test for the bug that the broken ctime gate would have
+        # caused: a real rename advances ctime even though btime, size, and
+        # mtime are all preserved. The new gate only requires btime to match
+        # (in addition to size + mtime), so cross-clock-tick renames must
+        # still optimize. If a future change reintroduces a ctime-style
+        # always-ticking field into the gate, this test will fail.
+        before = [_row(ino=130, size=99, mtime_ns=42, btime_ns=10, path="docs/old.md")]
+        after = [
+            _row(ino=130, size=99, mtime_ns=42, btime_ns=10, path="reports/new.md")
+        ]
+        dir_moves, file_moves, _ = compute_moves(
+            index_by_inode(before), index_by_inode(after)
+        )
+        assert file_moves == [("docs/old.md", "reports/new.md")]
 
     def test_hardlinks_skipped_by_default(self):
         before = [_row(ino=50, nlink=2, path="a"), _row(ino=50, nlink=2, path="link")]

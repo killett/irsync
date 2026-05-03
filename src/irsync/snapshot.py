@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal, TypedDict
 
 from irsync import __version__
+from irsync.statx import btime_ns as _btime_ns
 
 SNAPSHOT_FILENAME: str = ".irsync_snapshot.jsonl"
 LOCKFILE_NAME: str = ".irsync.lock"
@@ -37,8 +38,8 @@ class Row(TypedDict):
     nlink: int
     size: int
     mtime_ns: int  # st_mtime_ns; combined with size, defends against inode reuse
-    ctime_ns: (
-        int  # st_ctime_ns; tiebreaker against NFS-style same-second mtime collisions
+    btime_ns: (
+        int  # statx birth time; tiebreaker that survives rename, -1 if unsupported
     )
     path: str  # POSIX relative path from snapshot root
 
@@ -129,7 +130,7 @@ def snapshot_tree(
                         nlink=int(st.st_nlink),
                         size=int(st.st_size),
                         mtime_ns=int(st.st_mtime_ns),
-                        ctime_ns=int(st.st_ctime_ns),
+                        btime_ns=_btime_ns(entry),
                         path=rel,
                     )
                 )
@@ -145,7 +146,7 @@ def snapshot_tree(
             nlink=int(st_root.st_nlink),
             size=int(st_root.st_size),
             mtime_ns=int(st_root.st_mtime_ns),
-            ctime_ns=int(st_root.st_ctime_ns),
+            btime_ns=_btime_ns(root),
             path=".",
         )
     )
@@ -262,7 +263,7 @@ def read_snapshot(
             if k not in obj:
                 raise SystemExit(f"Missing key '{k}' in {file}:{ln}")
         obj.setdefault("mtime_ns", -1)
-        obj.setdefault("ctime_ns", -1)
+        obj.setdefault("btime_ns", -1)
         rows.append(obj)
     return header, rows
 
@@ -293,10 +294,11 @@ def read_jsonl(file: Path) -> list[Row]:
             for k in ("dev", "ino", "type", "nlink", "size", "path"):
                 if k not in obj:
                     raise SystemExit(f"Missing key '{k}' in {file}:{ln}")
-            # mtime_ns and ctime_ns were added later; tolerate snapshots
-            # written by older versions by defaulting to a sentinel (-1) that
-            # compute_moves interprets as "unknown — refuse to declare a move".
+            # mtime_ns and btime_ns were added in later passes; tolerate
+            # snapshots written by older versions by defaulting to a sentinel
+            # (-1). Missing mtime forces a conservative fallback in
+            # compute_moves; missing btime just disables the btime tiebreaker.
             obj.setdefault("mtime_ns", -1)
-            obj.setdefault("ctime_ns", -1)
+            obj.setdefault("btime_ns", -1)
             out.append(obj)
     return out

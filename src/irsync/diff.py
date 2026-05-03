@@ -21,7 +21,7 @@ class NodeInfo(TypedDict):
     nlink: int
     size: int
     mtime_ns: int
-    ctime_ns: int
+    btime_ns: int
     paths: set[str]
 
 
@@ -43,7 +43,7 @@ def index_by_inode(rows: Iterable[Row]) -> dict[tuple[int, int], NodeInfo]:
                 nlink=r["nlink"],
                 size=r["size"],
                 mtime_ns=r.get("mtime_ns", -1),
-                ctime_ns=r.get("ctime_ns", -1),
+                btime_ns=r.get("btime_ns", -1),
                 paths=set(),
             )
         idx[key]["paths"].add(r["path"])
@@ -179,25 +179,30 @@ def compute_moves(
             (new_path,) = tuple(apaths)
             # Defend against inode reuse: a kernel that hands out a freed
             # inode number to a brand-new file would otherwise look identical
-            # to a rename. We require size, mtime_ns, AND ctime_ns to all
-            # agree. ctime_ns is the NEW-H1 (5th-pass) NFS-safety tiebreaker:
-            # second-granular mtime + reused inode + matching-size collisions
-            # would pass the size+mtime gate alone, and rsync would then skip
-            # the file because metadata appears unchanged, leaving stale
-            # content on dest. ctime always ticks on inode allocation, so a
-            # reused inode reliably has a different ctime from the prior
-            # occupant. -1 sentinels (legacy snapshots without these fields)
-            # are treated as "unknown" → refuse the move (safe fallback;
-            # rsync re-transfers, just less efficient until the next snapshot
-            # has full metadata).
+            # to a rename. The size+mtime_ns gate (H2 from pass 2) catches
+            # this on filesystems with nanosecond-precision mtime.
+            #
+            # The btime_ns tiebreaker (replacing the broken 5th-pass ctime
+            # attempt) closes the residual NFS hole: on second-granular FSes
+            # it's possible for an unrelated new file to land at the same
+            # inode with the same wall-clock-second mtime AND the same size.
+            # btime is set when the inode is allocated and never changes
+            # afterward, so a real rename preserves it while inode reuse
+            # always changes it. We only require btime to match WHEN both
+            # snapshots have it (>= 0); when either side reports -1 (statx
+            # unavailable, FS without btime support, or legacy snapshot),
+            # we fall back to the original size+mtime gate alone.
+            #
+            # mtime_ns == -1 sentinel (legacy snapshot pre-H2) still forces
+            # a conservative refuse-the-move — safe fallback, rsync re-
+            # transfers.
+            both_have_btime = b["btime_ns"] >= 0 and a["btime_ns"] >= 0
             if (
                 b["mtime_ns"] == -1
                 or a["mtime_ns"] == -1
-                or b["ctime_ns"] == -1
-                or a["ctime_ns"] == -1
                 or b["size"] != a["size"]
                 or b["mtime_ns"] != a["mtime_ns"]
-                or b["ctime_ns"] != a["ctime_ns"]
+                or (both_have_btime and b["btime_ns"] != a["btime_ns"])
             ):
                 logging.debug(
                     "Inode %s path changed but size/mtime differ "
