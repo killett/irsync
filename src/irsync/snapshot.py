@@ -92,11 +92,30 @@ def snapshot_tree(
 
     root_dev = st_root.st_dev
 
-    def walk(dir_path: Path) -> None:
+    rows.append(
+        Row(
+            dev=int(st_root.st_dev),
+            ino=int(st_root.st_ino),
+            type="d",
+            nlink=int(st_root.st_nlink),
+            size=int(st_root.st_size),
+            mtime_ns=int(st_root.st_mtime_ns),
+            btime_ns=_btime_ns(root),
+            path=".",
+        )
+    )
+
+    # 10th-F5: explicit-stack DFS instead of recursive walk(). The
+    # recursive form added one Python frame per directory level, so a
+    # tree deeper than sys.getrecursionlimit() (default ~1000) raised
+    # RecursionError mid-walk and left the user with no snapshot.
+    stack: list[Path] = [root]
+    while stack:
+        dir_path = stack.pop()
         try:
             entries = list(dir_path.iterdir())
         except (PermissionError, FileNotFoundError, NotADirectoryError):
-            return
+            continue
         for entry in entries:
             try:
                 st = entry.lstat()
@@ -109,7 +128,9 @@ def snapshot_tree(
             # itself, the lockfile, and any orphan tempfiles from a killed
             # _atomic_write_snapshot. Subdirectory files with the same names
             # are still included (this is the H1/NEW-H2 anchored-exclude
-            # principle: only the root entries are reserved).
+            # principle: only the root entries are reserved). Naturally
+            # limited to root since `relative_to(root)` of a subdir entry
+            # always contains "/".
             if rel in (SNAPSHOT_FILENAME, LOCKFILE_NAME):
                 continue
             if "/" not in rel and rel.startswith(SNAPSHOT_TEMPFILE_PREFIX):
@@ -134,24 +155,10 @@ def snapshot_tree(
                         path=rel,
                     )
                 )
-            # Recurse into directories without following symlinks.
+            # Descend into directories without following symlinks.
             if is_dir and not is_symlink and (not xdev or st.st_dev == root_dev):
-                walk(entry)
+                stack.append(entry)
 
-    rows.append(
-        Row(
-            dev=int(st_root.st_dev),
-            ino=int(st_root.st_ino),
-            type="d",
-            nlink=int(st_root.st_nlink),
-            size=int(st_root.st_size),
-            mtime_ns=int(st_root.st_mtime_ns),
-            btime_ns=_btime_ns(root),
-            path=".",
-        )
-    )
-
-    walk(root)
     return rows
 
 
@@ -165,7 +172,13 @@ def write_jsonl(rows: Iterable[Row], out_file: Path) -> None:
     Raises:
         OSError: If the file cannot be written.
     """
-    with out_file.open("w", encoding="utf-8", newline="\n") as f:
+    # 10th-F1: errors="surrogateescape" lets paths containing arbitrary
+    # non-UTF-8 bytes (legal on Linux, surfaced by os.listdir as surrogate
+    # codepoints) round-trip the file boundary instead of raising
+    # UnicodeEncodeError mid-snapshot.
+    with out_file.open(
+        "w", encoding="utf-8", errors="surrogateescape", newline="\n"
+    ) as f:
         for r in rows:
             f.write(json.dumps(r, separators=(",", ":"), ensure_ascii=False))
             f.write("\n")
@@ -195,7 +208,10 @@ def write_snapshot(
             created_at_utc=dt.datetime.now(dt.UTC).isoformat(),
         )
     }
-    with out_file.open("w", encoding="utf-8", newline="\n") as f:
+    # 10th-F1: see write_jsonl — same surrogateescape rationale.
+    with out_file.open(
+        "w", encoding="utf-8", errors="surrogateescape", newline="\n"
+    ) as f:
         f.write(json.dumps(header, separators=(",", ":"), ensure_ascii=False))
         f.write("\n")
         for r in rows:
@@ -228,52 +244,85 @@ def read_snapshot(
         SnapshotMismatch: If the header's source root doesn't match.
         SystemExit: If a row is malformed.
     """
-    text = file.read_text(encoding="utf-8")
-    lines = [ln for ln in text.split("\n") if ln.strip()]
-    if not lines:
-        return None, []
-
+    # 10th-F4: stream line by line instead of read_text + split("\n"). The
+    # old approach materialized the whole file as one str plus a list of
+    # line strs (~2× file size in RAM); for a multi-million-row tree that
+    # was a hard cap before compute_changes even started building its dict
+    # indexes. errors="surrogateescape" mirrors the writer so non-UTF-8
+    # bytes in paths round-trip back to the same surrogate codepoints
+    # (10th-F1).
     header: Header | None = None
-    first = json.loads(lines[0])
-    if isinstance(first, dict) and "_meta" in first:
-        meta = first["_meta"]
-        header = Header(
-            source_root=meta.get("source_root", ""),
-            irsync_version=meta.get("irsync_version", ""),
-            created_at_utc=meta.get("created_at_utc", ""),
-        )
-        expected = str(expected_source_root.resolve())
-        if header["source_root"] != expected:
-            raise SnapshotMismatch(
-                f"Snapshot at {file} was taken of {header['source_root']!r}, "
-                f"but the current source root is {expected!r}. Refusing to use it "
-                "as a diff baseline."
-            )
-        data_lines = lines[1:]
-    else:
-        data_lines = lines
-
     rows: list[Row] = []
-    for ln, line in enumerate(data_lines, 1):
+    with file.open("r", encoding="utf-8", errors="surrogateescape") as f:
+        first_line = ""
+        first_lineno = 0
+        for ln, line in enumerate(f, 1):
+            if line.strip():
+                first_line = line
+                first_lineno = ln
+                break
+        if not first_line:
+            return None, []
+
         try:
-            obj = json.loads(line)
+            first = json.loads(first_line)
         except json.JSONDecodeError as e:
-            raise SystemExit(f"Malformed JSONL at {file}:{ln}: {e}") from e
-        for k in ("dev", "ino", "type", "nlink", "size", "path"):
-            if k not in obj:
-                raise SystemExit(f"Missing key '{k}' in {file}:{ln}")
-        if obj["type"] not in ("f", "d", "l", "o"):
-            # 7th-M2: corrupted rows with unknown types were silently kept
-            # and later filtered out by compute_changes' type whitelist,
-            # hiding inode-level corruption. Refuse the whole snapshot.
-            raise SystemExit(
-                f"Invalid type {obj['type']!r} in {file}:{ln} "
-                "(expected one of 'f', 'd', 'l', 'o')"
+            raise SystemExit(f"Malformed JSONL at {file}:{first_lineno}: {e}") from e
+
+        if isinstance(first, dict) and "_meta" in first:
+            meta = first["_meta"]
+            header = Header(
+                source_root=meta.get("source_root", ""),
+                irsync_version=meta.get("irsync_version", ""),
+                created_at_utc=meta.get("created_at_utc", ""),
             )
-        obj.setdefault("mtime_ns", -1)
-        obj.setdefault("btime_ns", -1)
-        rows.append(obj)
+            expected = str(expected_source_root.resolve())
+            if header["source_root"] != expected:
+                raise SnapshotMismatch(
+                    f"Snapshot at {file} was taken of {header['source_root']!r}, "
+                    f"but the current source root is {expected!r}. Refusing to use it "
+                    "as a diff baseline."
+                )
+        else:
+            # Legacy headerless: the first line is itself a row.
+            rows.append(_validate_row(first, file, first_lineno))
+
+        for ln, line in enumerate(f, first_lineno + 1):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise SystemExit(f"Malformed JSONL at {file}:{ln}: {e}") from e
+            rows.append(_validate_row(obj, file, ln))
     return header, rows
+
+
+def _validate_row(obj: dict[str, object], file: Path, lineno: int) -> Row:
+    """Validate a parsed row dict and apply legacy-snapshot defaults.
+
+    Shared between :func:`read_snapshot` (10th-F4 streaming refactor) and
+    :func:`read_jsonl`. Raises :class:`SystemExit` with a precise location
+    on missing keys or an invalid type tag (7th-M2).
+    """
+    for k in ("dev", "ino", "type", "nlink", "size", "path"):
+        if k not in obj:
+            raise SystemExit(f"Missing key '{k}' in {file}:{lineno}")
+    if obj["type"] not in ("f", "d", "l", "o"):
+        # 7th-M2: corrupted rows with unknown types were silently kept
+        # and later filtered out by compute_changes' type whitelist,
+        # hiding inode-level corruption. Refuse the whole snapshot.
+        raise SystemExit(
+            f"Invalid type {obj['type']!r} in {file}:{lineno} "
+            "(expected one of 'f', 'd', 'l', 'o')"
+        )
+    # mtime_ns and btime_ns were added in later passes; tolerate snapshots
+    # written by older versions by defaulting to a sentinel (-1). Missing
+    # mtime forces a conservative fallback in compute_moves; missing btime
+    # just disables the btime tiebreaker.
+    obj.setdefault("mtime_ns", -1)
+    obj.setdefault("btime_ns", -1)
+    return obj  # type: ignore[return-value]
 
 
 def read_jsonl(file: Path) -> list[Row]:
@@ -290,7 +339,9 @@ def read_jsonl(file: Path) -> list[Row]:
         FileNotFoundError: If ``file`` does not exist.
     """
     out: list[Row] = []
-    with file.open("r", encoding="utf-8") as f:
+    # 10th-F1: see write_jsonl — surrogateescape on read so non-UTF-8
+    # bytes in legacy snapshots also round-trip cleanly.
+    with file.open("r", encoding="utf-8", errors="surrogateescape") as f:
         for ln, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -299,19 +350,5 @@ def read_jsonl(file: Path) -> list[Row]:
                 obj = json.loads(line)
             except json.JSONDecodeError as e:
                 raise SystemExit(f"Malformed JSONL at {file}:{ln}: {e}") from e
-            for k in ("dev", "ino", "type", "nlink", "size", "path"):
-                if k not in obj:
-                    raise SystemExit(f"Missing key '{k}' in {file}:{ln}")
-            if obj["type"] not in ("f", "d", "l", "o"):
-                raise SystemExit(
-                    f"Invalid type {obj['type']!r} in {file}:{ln} "
-                    "(expected one of 'f', 'd', 'l', 'o')"
-                )
-            # mtime_ns and btime_ns were added in later passes; tolerate
-            # snapshots written by older versions by defaulting to a sentinel
-            # (-1). Missing mtime forces a conservative fallback in
-            # compute_moves; missing btime just disables the btime tiebreaker.
-            obj.setdefault("mtime_ns", -1)
-            obj.setdefault("btime_ns", -1)
-            out.append(obj)
+            out.append(_validate_row(obj, file, ln))
     return out

@@ -1,13 +1,14 @@
 """End-to-end orchestration tests for irsync.run_backup."""
 
 import argparse
+import os
 import shutil
 
 import pytest
 
 from irsync.backup import _format_preview, run_backup
 from irsync.diff import Changes
-from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME
+from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME, snapshot_tree
 
 from .conftest import inode_for, tree_signature
 
@@ -398,6 +399,130 @@ class TestOrphanTempfileCleanup:
             "orphan .irsync-snap-* tempfile at dest_root must be cleaned up — "
             "rsync excludes the anchored pattern so without an explicit cleanup "
             "call, the orphan accumulates forever"
+        )
+
+
+class TestF3FsyncBeforeReplace:
+    """10th-pass F3: _atomic_write_snapshot must fsync the tempfile before
+    os.replace. Without that, a power loss between rename and the kernel's
+    delayed data flush leaves a directory entry pointing at empty/partial
+    content, breaking the next run's snapshot read."""
+
+    def test_10th_f3_fsync_called_on_tempfile_before_replace(
+        self, tmp_path, monkeypatch
+    ):
+        from irsync import backup as backup_mod
+
+        events: list[tuple[str, object]] = []
+        real_fsync = os.fsync
+        real_replace = os.replace
+
+        def recording_fsync(fd):
+            events.append(("fsync", fd))
+            return real_fsync(fd)
+
+        def recording_replace(src, dst):
+            events.append(("replace", (str(src), str(dst))))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(backup_mod.os, "fsync", recording_fsync)
+        monkeypatch.setattr(backup_mod.os, "replace", recording_replace)
+
+        target = tmp_path / "snap.jsonl"
+        rows = snapshot_tree(tmp_path)
+        backup_mod._atomic_write_snapshot(rows, tmp_path, target)
+
+        names = [name for name, _ in events]
+        assert names.count("fsync") >= 1, "fsync must be called on the tempfile"
+        assert names.count("replace") == 1, "replace must be called exactly once"
+        # fsync must happen BEFORE replace, otherwise the durability hole stays open.
+        assert names.index("fsync") < names.index("replace"), (
+            "fsync must precede os.replace so the new content is on disk "
+            "before the directory entry flips"
+        )
+
+
+class TestF2DestUntouchedOnNoChange:
+    """10th-pass F2: AD-2 says the backup drive must NEVER be accessed when
+    the source has no changes since the last run. _cleanup_orphan_tempfiles
+    used to run on dest_root before the no-changes short-circuit, waking the
+    drive on every run. The cleanup must move into the path that actually
+    writes to dest."""
+
+    def test_10th_f2_dest_root_not_iterdir_d_when_no_changes(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        from irsync import backup as backup_mod
+
+        src, dest = src_dest
+        # Seed so the second run takes the no-changes path.
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+
+        # Spy on _cleanup_orphan_tempfiles. Record which roots it was called
+        # with on the second (no-change) run. dest_root must not appear.
+        cleanup_calls: list[str] = []
+        real_cleanup = backup_mod._cleanup_orphan_tempfiles
+
+        def recording_cleanup(root):
+            cleanup_calls.append(str(root))
+            return real_cleanup(root)
+
+        monkeypatch.setattr(backup_mod, "_cleanup_orphan_tempfiles", recording_cleanup)
+
+        # Belt-and-suspenders: assert rsync isn't invoked (proves no-changes path).
+        rsync_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            backup_mod, "run_real_sync", lambda cmd: rsync_calls.append(cmd) or 0
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert rsync_calls == [], "no-change run should not invoke rsync"
+        assert str(dest) not in cleanup_calls, (
+            "dest tempfile cleanup must not run on a no-change backup — AD-2 "
+            "says the backup drive must remain untouched"
+        )
+
+    def test_10th_f2_dest_orphan_still_cleaned_when_changes_present(
+        self, src_dest, basic_options
+    ):
+        # Regression guard for 8th-NEW-H1: when the run actually touches dest
+        # (changes present), the dest orphan-tempfile cleanup must still fire.
+        from irsync.snapshot import SNAPSHOT_TEMPFILE_PREFIX
+
+        src, dest = src_dest
+        run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        dest_orphan = dest / f"{SNAPSHOT_TEMPFILE_PREFIX}f2_regression"
+        dest_orphan.write_text("orphan from a killed dest write")
+        # Trigger an actual change so we go through the "touch dest" path.
+        (src / "f2_change.bin").write_bytes(b"trigger")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert not dest_orphan.exists(), (
+            "dest orphan must still be cleaned when the run actually writes "
+            "to dest — 8th-NEW-H1 invariant"
         )
 
 

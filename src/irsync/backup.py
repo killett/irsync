@@ -73,6 +73,14 @@ def _atomic_write_snapshot(rows: list[Row], source_root: Path, target: Path) -> 
     tmp_path = Path(tmpname)
     try:
         write_snapshot(rows, source_root=source_root, out_file=tmp_path)
+        # 10th-F3: fsync the tempfile before replacing the live snapshot.
+        # os.replace is atomic at the directory-entry level, but the
+        # tempfile's data blocks may still be sitting in the kernel's
+        # page cache. A power loss between rename and flush leaves the
+        # new dirent pointing at empty/partial content; the next run's
+        # read_snapshot then chokes on malformed JSONL with no recovery.
+        with open(tmp_path, "rb") as f:
+            os.fsync(f.fileno())
         os.replace(tmp_path, target)
     except Exception:
         tmp_path.unlink(missing_ok=True)
@@ -284,15 +292,15 @@ def _run_backup_for_endpoints(
         endpoints.dest if isinstance(endpoints.dest, Path) else None
     )
 
-    # Sweep up any orphan tempfiles BEFORE snapshotting, so the snapshot
-    # doesn't include them and the next diff isn't polluted. Cover BOTH
-    # roots: the 7th-M1 persist-flip writes the dest snapshot first, so a
-    # kill mid-dest-write also strands a tempfile at dest_root that the
-    # anchored rsync exclude won't sweep (8th-NEW-H1).
+    # Sweep up any orphan tempfiles at SRC before snapshotting, so the
+    # snapshot doesn't include them and the next diff isn't polluted.
+    # The DEST cleanup is deliberately deferred to just before apply_moves
+    # below: AD-2 requires that a no-change run never wakes the backup
+    # drive (10th-F2). The 8th-NEW-H1 dest-orphan recovery is preserved —
+    # any run that actually writes to dest hits the cleanup before the
+    # write.
     if src_root is not None:
         _cleanup_orphan_tempfiles(src_root)
-    if dest_root is not None:
-        _cleanup_orphan_tempfiles(dest_root)
 
     # --snapshot-only: just write the snapshot to the source root and exit.
     if args.snapshot_only:
@@ -392,6 +400,14 @@ def _run_backup_for_endpoints(
         out = run_dry_run(cmd)
         print(out)
         return 0
+
+    # 10th-F2: dest cleanup deferred to here so a no-change run (which
+    # already returned at the any_changes() short-circuit above) never
+    # touches the backup drive. 8th-NEW-H1's "orphan-on-dest" recovery
+    # path is still intact: every run that reaches apply_moves / rsync
+    # cleans dest first.
+    if dest_root is not None:
+        _cleanup_orphan_tempfiles(dest_root)
 
     # Apply moves on dest tree first (only if we have a local dest and a diff).
     if changes is not None and dest_root is not None:
