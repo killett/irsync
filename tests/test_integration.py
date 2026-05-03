@@ -161,6 +161,11 @@ def _random_move_plan(
     attempts = 0
     max_attempts = num_moves * 20 + 50
 
+    def _file_newname(src: Path) -> str:
+        stem = src.stem or src.name
+        suffix = src.suffix
+        return f"{stem}_mv{rng.randint(1000, 9999)}{suffix}"
+
     def _pick_file_move() -> tuple[Path, Path] | None:
         # Sort to make rng.choice deterministic — set iteration order varies
         # by hash, and tmp_path's random suffix means hashes differ each run.
@@ -171,14 +176,22 @@ def _random_move_plan(
         src = rng.choice(candidates)
         dest_dir = rng.choice(dest_candidates)
         rename = rng.choice([True, False])
-        if rename:
-            stem = src.stem or src.name
-            suffix = src.suffix
-            newname = f"{stem}_mv{rng.randint(1000, 9999)}{suffix}"
-        else:
-            newname = src.name
+        newname = _file_newname(src) if rename else src.name
+        # 9th-pass: match make_random_moves.py:135-148 — when the picked
+        # combination would be a no-op (same parent dir, same name),
+        # re-sample dest_dir + rename up to 10 times before forcing a
+        # rename. Increases fuzz density so the seed-99 trajectory
+        # exercises more of the move-planning state space.
         if dest_dir == src.parent and newname == src.name:
-            newname = f"{src.stem}_mv{rng.randint(1000, 9999)}{src.suffix}"
+            tries = 0
+            while tries < 10 and dest_dir == src.parent and newname == src.name:
+                dest_dir = rng.choice(dest_candidates)
+                rename = rng.choice([True, False])
+                if rename:
+                    newname = _file_newname(src)
+                tries += 1
+            if dest_dir == src.parent and newname == src.name:
+                newname = _file_newname(src)
         desired = (dest_dir / newname).resolve()
         return src, _unique_target(desired, files, dirs, rng)
 
@@ -199,6 +212,19 @@ def _random_move_plan(
         dest_dir = rng.choice(opts)
         rename = rng.choice([True, False])
         new_name = f"{src.name}_mv{rng.randint(1000, 9999)}" if rename else src.name
+        # 9th-pass: match make_random_moves.py:169-178 — when the picked
+        # combination would be a no-op (same parent, no rename),
+        # re-sample dest_dir + rename up to 10 times before forcing a
+        # rename. Same reasoning as _pick_file_move.
+        if dest_dir == src.parent and not rename:
+            tries = 0
+            while tries < 10 and dest_dir == src.parent and not rename:
+                dest_dir = rng.choice(opts)
+                rename = rng.choice([True, False])
+                tries += 1
+            new_name = f"{src.name}_mv{rng.randint(1000, 9999)}" if rename else src.name
+            if dest_dir == src.parent and not rename:
+                new_name = f"{src.name}_mv{rng.randint(1000, 9999)}"
         desired = (dest_dir / new_name).resolve()
         return src, _unique_target(desired, files, dirs, rng)
 
