@@ -358,16 +358,22 @@ def compute_changes(
 
     before_keys = set(before.keys())
     after_keys = set(after.keys())
+    # Include "l" so brand-new and removed symlinks fire any_changes() and
+    # land in the rsync preview. Without "l" here, ln -s of a fresh link
+    # (or rm of an existing one) leaves the after-only / before-only inode
+    # filtered out, the parent dir's modification is suppressed because
+    # type "d" is excluded from the modification gate, and the entire
+    # backup short-circuits — silent divergence (7th-NEW-H1).
     deleted_paths = [
         p
         for k, e in before.items()
-        if k not in after_keys and e["type"] in ("d", "f")
+        if k not in after_keys and e["type"] in ("d", "f", "l")
         for p in e["paths"]
     ]
     created_paths = [
         p
         for k, e in after.items()
-        if k not in before_keys and e["type"] in ("d", "f")
+        if k not in before_keys and e["type"] in ("d", "f", "l")
         for p in e["paths"]
     ]
 

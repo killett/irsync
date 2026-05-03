@@ -262,6 +262,14 @@ def read_snapshot(
         for k in ("dev", "ino", "type", "nlink", "size", "path"):
             if k not in obj:
                 raise SystemExit(f"Missing key '{k}' in {file}:{ln}")
+        if obj["type"] not in ("f", "d", "l", "o"):
+            # 7th-M2: corrupted rows with unknown types were silently kept
+            # and later filtered out by compute_changes' type whitelist,
+            # hiding inode-level corruption. Refuse the whole snapshot.
+            raise SystemExit(
+                f"Invalid type {obj['type']!r} in {file}:{ln} "
+                "(expected one of 'f', 'd', 'l', 'o')"
+            )
         obj.setdefault("mtime_ns", -1)
         obj.setdefault("btime_ns", -1)
         rows.append(obj)
@@ -294,6 +302,11 @@ def read_jsonl(file: Path) -> list[Row]:
             for k in ("dev", "ino", "type", "nlink", "size", "path"):
                 if k not in obj:
                     raise SystemExit(f"Missing key '{k}' in {file}:{ln}")
+            if obj["type"] not in ("f", "d", "l", "o"):
+                raise SystemExit(
+                    f"Invalid type {obj['type']!r} in {file}:{ln} "
+                    "(expected one of 'f', 'd', 'l', 'o')"
+                )
             # mtime_ns and btime_ns were added in later passes; tolerate
             # snapshots written by older versions by defaulting to a sentinel
             # (-1). Missing mtime forces a conservative fallback in

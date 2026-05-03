@@ -332,6 +332,14 @@ class TestEndToEndIntegration:
         hardlink_anchor = initial_files[1]
         (src / "hardlink_b.bin").hardlink_to(hardlink_anchor)
 
+        # 7th-NEW-H1 deleted-symlink: lives in baseline, gets unlinked
+        # between backups. Without the type-"l" inclusion in
+        # compute_changes' deleted/created comprehensions, an isolated
+        # symlink delete would silently short-circuit any_changes() and
+        # the dest would keep the stale symlink forever.
+        delete_link_target = initial_files[3]
+        (src / "to_be_deleted.lnk").symlink_to(delete_link_target)
+
         # 2. First backup → baseline snapshot + dest tree.
         dest.mkdir()
         rc = run_backup(
@@ -400,6 +408,15 @@ class TestEndToEndIntegration:
         # NEW-H4 (4th-pass) hardlink path drop.
         (src / "hardlink_b.bin").unlink()
 
+        # 7th-NEW-H1 added symlink: brand new symlink, no inode in baseline.
+        # Without the H1 fix it would be filtered out of created_paths
+        # (type "l") and any_changes() would miss it in isolation.
+        added_link_target = initial_files[7]
+        (src / "freshly_added.lnk").symlink_to(added_link_target)
+
+        # 7th-NEW-H1 deleted symlink: was in baseline, gone now.
+        (src / "to_be_deleted.lnk").unlink()
+
         # NEW-H1 (5th-pass) genuine rename — must keep the optimization.
         # ctime gate requires size + mtime + ctime to ALL match. A pure
         # os.rename preserves all three on local FS, so the optimization
@@ -447,6 +464,15 @@ class TestEndToEndIntegration:
             hardlink_anchor.resolve(),
             # 5th NEW-H1: pure-rename destination.
             (src / rename_only_new_rel).resolve(),
+            # 7th-NEW-H1: added symlink itself + its target (mustn't dangle).
+            (src / "freshly_added.lnk").absolute(),
+            added_link_target.resolve(),
+            # 7th-NEW-H1: the now-unlinked deleted-symlink target. The
+            # symlink path itself no longer exists, so we exclude its
+            # target instead so fuzz can't relocate the file the symlink
+            # used to reference (which would change behaviour at the
+            # baseline-comparison level).
+            delete_link_target.resolve(),
             # Created path.
             (src / created_rel).resolve(),
             # Reserved root files: snapshot and lockfile must stay where
@@ -549,3 +575,203 @@ class TestEndToEndIntegration:
         # Created + deleted: present / absent on dest as expected.
         assert (dest / created_rel).read_bytes() == b"newly created file"
         assert not (dest / delete_rel).exists()
+
+        # 7th-NEW-H1: brand-new symlink reached dest, deleted symlink is
+        # gone from dest. Without the type-"l" inclusion in
+        # compute_changes' deleted/created comprehensions, an isolated
+        # symlink change would silently short-circuit any_changes(); here
+        # the symlink change rides alongside other mutations so the gate
+        # fires regardless, but the symmetric add/remove behaviour is
+        # still worth pinning in the umbrella.
+        assert (dest / "freshly_added.lnk").is_symlink(), (
+            "added symlink must be transferred to dest"
+        )
+        assert not (dest / "to_be_deleted.lnk").exists(), (
+            "deleted symlink must be removed from dest by --delete-before"
+        )
+
+
+class TestSeventhPassIntegrationCoverage:
+    """Standalone end-to-end tests for previously-fixed bugs that the umbrella
+    test doesn't exercise: cross-device replay refusal (5th NEW-H2) and the
+    ``--no-snapshot --yes`` audit-trail invariant (5th NEW-M1)."""
+
+    def test_7th_xdev_refused_via_real_preflight_no_snapshot_persisted(
+        self,
+        tmp_path: Path,
+        basic_options: Options,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The unit test at test_backup.py monkeypatches apply_moves directly,
+        # which bypasses the actual _preflight_check_xdev code. Here we
+        # patch one level deeper — _dev_of returns a different st_dev for
+        # one of the planned paths — so the real pre-flight runs and
+        # raises CrossDeviceMoveError. Confirms the orchestrator catches
+        # it, returns non-zero, doesn't run rsync, and leaves the source
+        # snapshot at its old baseline so a corrected re-run still has a
+        # clean diff.
+        from pathlib import Path as _Path
+
+        from irsync import replay as replay_mod
+
+        src = tmp_path / "src"
+        dest = tmp_path / "dest"
+        src.mkdir()
+        (src / "to_rename.bin").write_bytes(b"will be renamed")
+        (src / "stable.bin").write_bytes(b"unchanged content")
+        dest.mkdir()
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        snap_path = src / SNAPSHOT_FILENAME
+        baseline_bytes = snap_path.read_bytes()
+
+        # Rename so the next run plans a file move and apply_moves runs.
+        (src / "to_rename.bin").rename(src / "renamed.bin")
+
+        real_dev_of = replay_mod._dev_of
+        dest_root_dev = dest.stat().st_dev
+
+        def fake_dev_of(p: _Path) -> int:
+            real = real_dev_of(p)
+            # Simulate that the renamed file's dest path is on another mount.
+            if "renamed.bin" in str(p):
+                return real + 9999  # different from dest_root_dev
+            return dest_root_dev if real == dest_root_dev else real
+
+        monkeypatch.setattr(replay_mod, "_dev_of", fake_dev_of)
+
+        rsync_calls: list[list[str]] = []
+
+        def _record_rsync(cmd: list[str]) -> int:
+            rsync_calls.append(cmd)
+            return 0
+
+        monkeypatch.setattr("irsync.backup.run_real_sync", _record_rsync)
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc != 0, "xdev refusal must surface as non-zero"
+        assert rsync_calls == [], (
+            "rsync must not run after the pre-flight refused the replay"
+        )
+        assert snap_path.read_bytes() == baseline_bytes, (
+            "snapshot must NOT be persisted after a refused replay so the "
+            "corrected re-run has the right baseline"
+        )
+
+    def test_7th_h1_isolated_symlink_add_then_delete_reaches_dest(
+        self,
+        tmp_path: Path,
+        basic_options: Options,
+    ) -> None:
+        # 7th-NEW-H1 end-to-end isolation: with NO other mutations, only
+        # symlink changes between backups. Before the type-"l" fix to
+        # compute_changes, an isolated symlink add would leave
+        # any_changes()=False and the backup would short-circuit, leaving
+        # dest stale. This test fails closed: any regression that drops
+        # "l" from the comprehension breaks the second assertion.
+        src = tmp_path / "src_h1"
+        dest = tmp_path / "dest_h1"
+        src.mkdir()
+        (src / "real_file.bin").write_bytes(b"target content")
+        dest.mkdir()
+
+        # Baseline.
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert _signature_excluding_internal(src) == _signature_excluding_internal(dest)
+
+        # Mutation: ONLY a brand-new symlink. Nothing else changes. If
+        # any_changes() spuriously returns False here, the backup
+        # short-circuits and the symlink never reaches dest.
+        (src / "isolated_link.lnk").symlink_to(src / "real_file.bin")
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert (dest / "isolated_link.lnk").is_symlink(), (
+            "isolated symlink add must reach dest — H1 regression check"
+        )
+
+        # Mutation: ONLY delete the symlink. Same isolation as above.
+        (src / "isolated_link.lnk").unlink()
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert not (dest / "isolated_link.lnk").exists(), (
+            "isolated symlink delete must propagate to dest — H1 regression check"
+        )
+
+    def test_7th_no_snapshot_yes_prints_dry_run_preview_to_stdout(
+        self,
+        tmp_path: Path,
+        basic_options: Options,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # 5th-NEW-M1 end-to-end: --no-snapshot --yes (the cron mode that
+        # skips the inode optimization entirely) must still print the
+        # rsync dry-run preview to stdout so a cron job's log captures
+        # what was about to be transferred. The unit test at
+        # test_backup.py:test_5th_m1_no_snapshot_yes_prints_dry_run_preview_to_stdout
+        # covers this with mocked rsync; here we want the same invariant
+        # with a real source tree but a stub rsync (we don't actually want
+        # to install rsync as a CI dep), to confirm the integration-level
+        # flow.
+        src = tmp_path / "src"
+        dest = tmp_path / "dest"
+        src.mkdir()
+        (src / "alpha.bin").write_bytes(b"alpha")
+        (src / "beta.bin").write_bytes(b"beta")
+        dest.mkdir()
+
+        # Stub the dry-run output so we don't depend on a real rsync; the
+        # invariant we care about is that this output reaches stdout under
+        # --yes (cron path), not the specific text rsync would have
+        # produced.
+        sentinel = "RSYNC_DRY_RUN_SENTINEL_alpha.bin\n"
+
+        def fake_dry_run(cmd: list[str]) -> str:
+            return sentinel
+
+        def fake_real_sync(cmd: list[str]) -> int:
+            return 0
+
+        monkeypatch.setattr("irsync.backup.run_dry_run", fake_dry_run)
+        monkeypatch.setattr("irsync.backup.run_real_sync", fake_real_sync)
+
+        capsys.readouterr()  # discard any earlier output
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(no_snapshot=True),
+        )
+        assert rc == 0
+        captured = capsys.readouterr().out
+        assert sentinel in captured, (
+            "--no-snapshot --yes must print the rsync dry-run preview to "
+            "stdout so cron logs capture the audit trail (AD-7)"
+        )

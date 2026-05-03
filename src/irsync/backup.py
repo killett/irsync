@@ -80,10 +80,18 @@ def _atomic_write_snapshot(rows: list[Row], source_root: Path, target: Path) -> 
 
 
 def _persist_snapshots(rows: list[Row], src_root: Path, dest_root: Path | None) -> None:
-    """Write the fresh snapshot to the source root and (if local) the dest root."""
-    _atomic_write_snapshot(rows, src_root, src_root / SNAPSHOT_FILENAME)
+    """Write the fresh snapshot to (if local) the dest root, then the source root.
+
+    Order matters (7th-M1): a failure / SIGKILL between the two writes used
+    to leave src updated and dest stale. On a DR restore (source disk dies,
+    user copies dest content + dest snapshot back), that asymmetry produced
+    a baseline that didn't match the restored content. By writing dest first,
+    a dest failure aborts the function before src is touched, leaving the
+    src baseline at its OLD value so the next run still reconciles cleanly.
+    """
     if dest_root is not None:
         _atomic_write_snapshot(rows, src_root, dest_root / SNAPSHOT_FILENAME)
+    _atomic_write_snapshot(rows, src_root, src_root / SNAPSHOT_FILENAME)
 
 
 def _format_preview(changes: Changes) -> str:

@@ -656,6 +656,58 @@ class TestSnapshotPersistedAfterRsyncSucceeds:
         )
 
 
+class TestSnapshotPersistOrdering:
+    def test_7th_m1_dest_persisted_first_so_src_unchanged_when_dest_fails(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # 7th-M1: _persist_snapshots used to write src before dest, so a
+        # failure / SIGKILL between the two writes left src updated to the
+        # fresh state and dest stale. On a DR restore that brought the
+        # stale dest snapshot back as the new baseline, the user inherited
+        # a snapshot that didn't reflect what dest actually contained.
+        # The fix is to write dest first; if it fails, src stays at the
+        # OLD baseline and the next run can re-attempt with consistent
+        # state on both sides.
+        import irsync.backup as backup_mod
+
+        src, dest = src_dest
+        # First (successful) backup writes a baseline snapshot to both.
+        run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        snap_path = src / SNAPSHOT_FILENAME
+        baseline_bytes = snap_path.read_bytes()
+
+        # Make a change so the second run actually reaches the persist step.
+        (src / "new_file.bin").write_bytes(b"new data")
+
+        real_write = backup_mod._atomic_write_snapshot
+
+        def _fail_on_dest(rows, source_root, target):
+            if str(target).startswith(str(dest)):
+                raise OSError("simulated dest snapshot write failure")
+            return real_write(rows, source_root, target)
+
+        monkeypatch.setattr(backup_mod, "_atomic_write_snapshot", _fail_on_dest)
+
+        with pytest.raises(OSError, match="simulated dest snapshot write failure"):
+            run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert snap_path.read_bytes() == baseline_bytes, (
+            "source snapshot must remain at the old baseline when the dest "
+            "snapshot write fails — DR-restored backups would otherwise "
+            "inherit a snapshot newer than the dest content"
+        )
+
+
 class TestCycleBreakOrphanCleanup:
     def test_5th_orphan_mvtmp_dir_removed_by_rsync_delete_before(
         self, src_dest, basic_options

@@ -1,3 +1,5 @@
+import pytest
+
 from irsync.diff import (
     Changes,
     compute_changes,
@@ -382,4 +384,179 @@ class TestComputeChanges:
         assert "b" in changes.deleted, "removed hardlink path must appear in deleted"
         assert "a" not in changes.deleted, (
             "kept hardlink path must NOT appear in deleted"
+        )
+
+    def test_7th_h1_added_symlink_fires_created_and_any_changes(self, tmp_path):
+        # 7th-NEW-H1 regression: a brand-new symlink (after-only inode, type
+        # "l") was filtered out of created_paths because the comprehension
+        # only kept type in {"d","f"}. Result: any_changes() returned False
+        # and the backup short-circuited, leaving the new symlink off the
+        # dest. Backed by a real os.symlink + snapshot_tree so the field
+        # semantics match production (per the 6th-pass synthesized-row trap).
+        from irsync.snapshot import snapshot_tree
+
+        root = tmp_path / "tree"
+        root.mkdir()
+        (root / "real.txt").write_bytes(b"target content")
+        before_rows = snapshot_tree(root)
+
+        (root / "fresh.lnk").symlink_to(root / "real.txt")
+        after_rows = snapshot_tree(root)
+
+        changes = compute_changes(before_rows, after_rows)
+        assert "fresh.lnk" in changes.created, (
+            f"added symlink must appear in created; got {changes.created!r}"
+        )
+        assert changes.any_changes(), (
+            "adding a symlink must NOT trigger the no-changes short-circuit"
+        )
+
+    def test_7th_h1_deleted_symlink_fires_deleted_and_any_changes(self, tmp_path):
+        # 7th-NEW-H1 regression: a removed symlink (before-only inode, type
+        # "l") was filtered out of deleted_paths. any_changes() returned
+        # False and the dest kept the stale symlink forever.
+        from irsync.snapshot import snapshot_tree
+
+        root = tmp_path / "tree"
+        root.mkdir()
+        (root / "real.txt").write_bytes(b"target content")
+        (root / "to_delete.lnk").symlink_to(root / "real.txt")
+        before_rows = snapshot_tree(root)
+
+        (root / "to_delete.lnk").unlink()
+        after_rows = snapshot_tree(root)
+
+        changes = compute_changes(before_rows, after_rows)
+        assert "to_delete.lnk" in changes.deleted, (
+            f"removed symlink must appear in deleted; got {changes.deleted!r}"
+        )
+        assert changes.any_changes(), (
+            "removing a symlink must NOT trigger the no-changes short-circuit"
+        )
+
+    def test_7th_nfs_inode_reuse_via_real_baseline_plus_forged_after_row(
+        self, tmp_path
+    ):
+        # 7th-pass coverage backstop for 6th-pass NEW-H1: build the BEFORE
+        # snapshot from a real tree (so dev/ino/size/mtime_ns/btime_ns have
+        # the field semantics they'd have on a real FS), then forge the
+        # AFTER snapshot by surgically mutating one row to simulate an
+        # NFS-style inode-reuse event the gate must reject:
+        #   * same (dev, ino) — kernel handed the freed inode to a new file
+        #   * same size       — coincidence (or rounded-up block sizes match)
+        #   * same mtime_ns   — second-granular FS, both events in the same
+        #                       wall-clock second
+        #   * DIFFERENT btime — birth time is set fresh on inode allocation
+        # Without the btime gate, this would look identical to a rename.
+        # With the gate, it must be split into delete(old) + create(new).
+        # This complements test_5th_h1_inode_reuse_with_matching_size_and_mtime_blocked_by_btime
+        # which uses fully synthesized rows (the 6th-pass synthesized-row
+        # trap warned about): here, every field except the simulated reuse
+        # mutation comes from a real lstat + statx call.
+        from irsync.snapshot import snapshot_tree
+
+        root = tmp_path / "tree"
+        root.mkdir()
+        (root / "original.txt").write_bytes(b"original payload, twelve bytes")
+        before_rows = snapshot_tree(root)
+        original_row = next(r for r in before_rows if r["path"] == "original.txt")
+
+        # Build the after snapshot from the real baseline, then drop the
+        # original row and append a forged "reused-inode at new path" row.
+        # btime_ns >= 0 on a modern ext4/btrfs/xfs CI runner; if statx is
+        # unavailable on this runner, skip — the gate falls back to size
+        # +mtime alone and this scenario doesn't apply.
+        if original_row["btime_ns"] < 0:
+            pytest.skip("statx btime unavailable on this filesystem; gate falls back")
+
+        after_rows = [r for r in before_rows if r["path"] != "original.txt"]
+        forged_row = {
+            **original_row,
+            "path": "reused.txt",
+            # Newly-allocated inode would have a fresh btime — bump by 1 day
+            # so the difference is unambiguous and can't collide with the
+            # original via clock skew.
+            "btime_ns": original_row["btime_ns"] + 86_400_000_000_000,
+        }
+        after_rows.append(forged_row)
+
+        changes = compute_changes(before_rows, after_rows)
+        assert changes.file_moves == [], (
+            "btime mismatch must block the false move on NFS-style "
+            f"same-second inode reuse; got {changes.file_moves!r}"
+        )
+        assert "original.txt" in changes.deleted, (
+            "the freed path must be deleted from dest"
+        )
+        assert "reused.txt" in changes.created, (
+            "the reused-inode new path must be created on dest"
+        )
+
+    def test_7th_real_rename_via_actual_syscalls_optimizes_as_a_move(self, tmp_path):
+        # 7th-pass coverage backstop: a REAL os.rename across a non-trivial
+        # delay (so the wall clock can advance) preserves dev/ino/size/
+        # mtime_ns/btime_ns. The gate must still treat it as a move. This
+        # backs the 5th/6th-pass unit tests (which used synthesized rows)
+        # with actual-syscall coverage.
+        import time
+
+        from irsync.snapshot import snapshot_tree
+
+        root = tmp_path / "tree"
+        root.mkdir()
+        (root / "before.bin").write_bytes(b"some content here")
+        before_rows = snapshot_tree(root)
+
+        # Sleep just long enough that any always-ticking field (ctime,
+        # access patterns) couldn't possibly land in the same nanosecond.
+        # Then rename and re-snapshot.
+        time.sleep(0.01)
+        (root / "before.bin").rename(root / "after.bin")
+        after_rows = snapshot_tree(root)
+
+        changes = compute_changes(before_rows, after_rows)
+        assert changes.file_moves == [("before.bin", "after.bin")], (
+            f"real rename must optimize as a move; got {changes.file_moves!r}"
+        )
+        assert "before.bin" not in changes.deleted
+        assert "after.bin" not in changes.created
+
+    def test_7th_h1_symlink_target_replaced_fires_any_changes(self, tmp_path):
+        # 7th-NEW-H1 regression: ln -sf to overwrite a symlink does
+        # unlink + symlink, producing a fresh inode at the same path. Old
+        # inode is in before-only with type "l"; new inode is in after-only
+        # with type "l". Both filtered out, any_changes() returned False,
+        # dest kept the old target.
+        from irsync.snapshot import snapshot_tree
+
+        # Use different-length target names so the symlink's own size
+        # differs between before/after; without this, an inode-reuse event
+        # with same-sized targets and same-tick mtime can leave Changes
+        # empty even when the symlink genuinely changed.
+        root = tmp_path / "tree"
+        root.mkdir()
+        (root / "short.txt").write_bytes(b"A")
+        (root / "much_longer_target_name.txt").write_bytes(b"B")
+        link = root / "swap.lnk"
+        link.symlink_to(root / "short.txt")
+        before_rows = snapshot_tree(root)
+
+        link.unlink()
+        link.symlink_to(root / "much_longer_target_name.txt")
+        after_rows = snapshot_tree(root)
+
+        changes = compute_changes(before_rows, after_rows)
+        assert changes.any_changes(), (
+            "replacing a symlink target (unlink+symlink) must NOT short-circuit"
+        )
+        # The replaced path lands in modified when the kernel reuses the
+        # inode, or in deleted+created when it allocates a fresh one. Either
+        # signals "the dest needs an update" — which is the contract that
+        # was broken before this fix.
+        assert "swap.lnk" in changes.modified or (
+            "swap.lnk" in changes.deleted and "swap.lnk" in changes.created
+        ), (
+            f"replaced symlink must surface as modified or deleted+created; "
+            f"got modified={changes.modified!r}, deleted={changes.deleted!r}, "
+            f"created={changes.created!r}"
         )

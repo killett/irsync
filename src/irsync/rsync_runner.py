@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import logging
 import os
@@ -134,6 +135,14 @@ def run_dry_run(cmd: list[str]) -> str:
 def run_real_sync(cmd: list[str]) -> int:
     """Run a real (non-dry-run) rsync command, streaming stderr live.
 
+    The child runs in its own session (``start_new_session=True``) so a
+    parent SIGKILL doesn't leave it as an orphan that races subsequent
+    irsync runs against the same destination (7th-NEW-H2). On any
+    exception leaving this function — KeyboardInterrupt, the parent's
+    own SIGTERM after Python's default handler, etc. — the child is
+    terminated before the exception propagates, so it can't continue
+    writing to dest after we've aborted.
+
     Args:
         cmd: The full rsync command without ``--dry-run``.
 
@@ -147,17 +156,36 @@ def run_real_sync(cmd: list[str]) -> int:
         stdout=None,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
     stderr_buf: list[str] = []
     if proc.stderr is None:
         raise RuntimeError("rsync subprocess did not expose stderr")
-    for line in proc.stderr:
-        sys.stderr.write(line)
-        sys.stderr.flush()
-        stderr_buf.append(line)
-    ret = proc.wait()
-    if proc.stderr:
-        proc.stderr.close()
+    try:
+        for line in proc.stderr:
+            sys.stderr.write(line)
+            sys.stderr.flush()
+            stderr_buf.append(line)
+        ret = proc.wait()
+    except BaseException:
+        # KeyboardInterrupt, SystemExit, or any unexpected exception. We
+        # MUST stop rsync before propagating, or it will keep updating
+        # dest in the background and a subsequent run will race it.
+        # Best-effort cleanup: any failure here gets swallowed so the
+        # original exception is what reaches the caller.
+        with contextlib.suppress(Exception):
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=2)
+        raise
+    finally:
+        if proc.stderr is not None:
+            with contextlib.suppress(Exception):
+                proc.stderr.close()
     elapsed = dt.datetime.now() - started
     if ret != 0:
         logging.error(

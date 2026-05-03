@@ -149,6 +149,33 @@ class TestWriteReadRoundtrip:
         with pytest.raises(SystemExit):
             read_jsonl(out)
 
+    def test_7th_m2_read_jsonl_rejects_invalid_type_value(self, tmp_path):
+        # 7th-M2: a corrupted snapshot row with an unknown type ("x", "")
+        # was silently appended; later compute_changes filtered it out via
+        # the type whitelist, hiding the corruption. read_jsonl must reject
+        # it up front so a corrupted snapshot file can't cause silent
+        # invisibility of inodes during the diff.
+        out = tmp_path / "bad_type.jsonl"
+        out.write_text(
+            '{"dev":1,"ino":2,"type":"x","nlink":1,"size":0,"path":"a"}\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(SystemExit):
+            read_jsonl(out)
+
+    def test_7th_m2_read_snapshot_rejects_invalid_type_value(self, tmp_path):
+        # Same defense as the read_jsonl variant, but for the headered
+        # read_snapshot path that the orchestrator actually uses.
+        out = tmp_path / "bad_type.jsonl"
+        header_line = (
+            '{"_meta":{"source_root":"' + str(tmp_path.resolve()) + '",'
+            '"irsync_version":"x","created_at_utc":"x"}}\n'
+        )
+        bad_row = '{"dev":1,"ino":2,"type":"q","nlink":1,"size":0,"path":"a","mtime_ns":0,"btime_ns":-1}\n'
+        out.write_text(header_line + bad_row, encoding="utf-8")
+        with pytest.raises(SystemExit):
+            read_snapshot(out, expected_source_root=tmp_path)
+
 
 class TestBtimeField:
     def test_5th_h1_snapshot_records_btime_ns_per_row(self, tmp_path):
