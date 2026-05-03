@@ -233,17 +233,22 @@ def _run_snapshot_only(*, source_arg: str, options: Options) -> int:
     return 0
 
 
-def _cleanup_orphan_tempfiles(src_root: Path) -> int:
+def _cleanup_orphan_tempfiles(root: Path) -> int:
     """Delete leftover ``.irsync-snap-*`` tempfiles from prior killed runs.
 
     ``_atomic_write_snapshot`` uses ``tempfile.mkstemp`` and could leave an
-    orphan if the process dies between mkstemp and os.replace. Without this
-    cleanup the orphans accumulate at the source root, get included in the
-    next snapshot, and get backed up to dest as garbage.
+    orphan if the process dies between mkstemp and os.replace. Orphans
+    accumulate at the root because rsync's anchored ``/.irsync-snap-*``
+    exclude prevents both transfer and ``--delete-before`` cleanup.
+
+    Must be called for both the source root AND the dest root (when
+    local): 7th-M1 flipped persist order to dest-first, so a kill
+    between mkstemp and os.replace during the dest write strands the
+    tempfile there too (8th-NEW-H1).
     """
     removed = 0
     try:
-        entries = list(src_root.iterdir())
+        entries = list(root.iterdir())
     except (FileNotFoundError, PermissionError):
         return 0
     for p in entries:
@@ -254,7 +259,9 @@ def _cleanup_orphan_tempfiles(src_root: Path) -> int:
             except OSError as e:
                 logging.warning("Could not remove orphan tempfile %s: %s", p, e)
     if removed:
-        logging.info("Cleaned up %d orphan .irsync-snap-* tempfile(s).", removed)
+        logging.info(
+            "Cleaned up %d orphan .irsync-snap-* tempfile(s) in %s.", removed, root
+        )
     return removed
 
 
@@ -278,9 +285,14 @@ def _run_backup_for_endpoints(
     )
 
     # Sweep up any orphan tempfiles BEFORE snapshotting, so the snapshot
-    # doesn't include them and the next diff isn't polluted.
+    # doesn't include them and the next diff isn't polluted. Cover BOTH
+    # roots: the 7th-M1 persist-flip writes the dest snapshot first, so a
+    # kill mid-dest-write also strands a tempfile at dest_root that the
+    # anchored rsync exclude won't sweep (8th-NEW-H1).
     if src_root is not None:
         _cleanup_orphan_tempfiles(src_root)
+    if dest_root is not None:
+        _cleanup_orphan_tempfiles(dest_root)
 
     # --snapshot-only: just write the snapshot to the source root and exit.
     if args.snapshot_only:
@@ -474,7 +486,13 @@ def _page_output(text: str) -> None:
     """Pipe ``text`` through ``less`` if available, else print directly."""
     pager = shutil.which("less")
     if pager:
-        proc = subprocess.Popen([pager], stdin=subprocess.PIPE, text=True)  # noqa: S603
+        # 8th-M1: detach the pager from the parent's tty/session so a
+        # SIGKILL of the parent doesn't leave less zombied on the
+        # controlling terminal. Parity with run_real_sync's 7th-pass
+        # session isolation.
+        proc = subprocess.Popen(  # noqa: S603
+            [pager], stdin=subprocess.PIPE, text=True, start_new_session=True
+        )
         proc.communicate(input=text)
         proc.wait()
     else:

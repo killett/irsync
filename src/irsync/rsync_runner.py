@@ -8,8 +8,10 @@ import logging
 import os
 import re
 import shlex
+import signal
 import subprocess  # noqa: S404 — invoking rsync is the whole point of this module
 import sys
+import threading
 from pathlib import Path
 
 from irsync.snapshot import (
@@ -161,31 +163,74 @@ def run_real_sync(cmd: list[str]) -> int:
     stderr_buf: list[str] = []
     if proc.stderr is None:
         raise RuntimeError("rsync subprocess did not expose stderr")
+
+    # 8th-NEW-H3: Python's default SIGTERM handler kills the process
+    # without raising, so the BaseException cleanup below would never
+    # fire on cron-timeout / systemctl stop and rsync would orphan
+    # exactly as it did before 7th-NEW-H2. Install a handler that
+    # raises KeyboardInterrupt — this piggybacks on the existing
+    # cleanup path. signal.signal must be called from the main thread,
+    # so skip on non-main threads (no test runs there) rather than
+    # crash. Always restore the previous handler on exit.
+    def _sigterm_to_keyboardinterrupt(_signum: int, _frame: object) -> None:
+        raise KeyboardInterrupt("rsync run interrupted by SIGTERM")
+
+    on_main_thread = threading.current_thread() is threading.main_thread()
+    previous_sigterm: object = None
+    sigterm_installed = False
+    if on_main_thread:
+        try:
+            previous_sigterm = signal.signal(
+                signal.SIGTERM, _sigterm_to_keyboardinterrupt
+            )
+            sigterm_installed = True
+        except (ValueError, OSError):
+            # Off-main-thread / restricted env: leave the default in place.
+            sigterm_installed = False
+
     try:
-        for line in proc.stderr:
-            sys.stderr.write(line)
-            sys.stderr.flush()
-            stderr_buf.append(line)
-        ret = proc.wait()
-    except BaseException:
-        # KeyboardInterrupt, SystemExit, or any unexpected exception. We
-        # MUST stop rsync before propagating, or it will keep updating
-        # dest in the background and a subsequent run will race it.
-        # Best-effort cleanup: any failure here gets swallowed so the
-        # original exception is what reaches the caller.
-        with contextlib.suppress(Exception):
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                with contextlib.suppress(Exception):
-                    proc.wait(timeout=2)
-        raise
-    finally:
-        if proc.stderr is not None:
+        try:
+            for line in proc.stderr:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                stderr_buf.append(line)
+            ret = proc.wait()
+        except BaseException:
+            # KeyboardInterrupt (incl. our SIGTERM-as-KI), SystemExit, or
+            # any unexpected exception. We MUST stop rsync before
+            # propagating, or it will keep updating dest in the
+            # background and a subsequent run will race it. Signal the
+            # whole process group (8th-NEW-H2): with start_new_session
+            # the rsync child leads its own pgrp, and rsync may have
+            # forked ssh for remote endpoints. plain proc.terminate()
+            # targets only the leader; we need killpg so the ssh child
+            # dies with rsync. Best-effort: ProcessLookupError on
+            # already-exited child is fine.
             with contextlib.suppress(Exception):
-                proc.stderr.close()
+                try:
+                    pgid = os.getpgid(proc.pid)
+                except (ProcessLookupError, OSError):
+                    pgid = None
+                if pgid is not None:
+                    with contextlib.suppress(ProcessLookupError, OSError):
+                        os.killpg(pgid, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    if pgid is not None:
+                        with contextlib.suppress(ProcessLookupError, OSError):
+                            os.killpg(pgid, signal.SIGKILL)
+                    with contextlib.suppress(Exception):
+                        proc.wait(timeout=2)
+            raise
+        finally:
+            if proc.stderr is not None:
+                with contextlib.suppress(Exception):
+                    proc.stderr.close()
+    finally:
+        if sigterm_installed:
+            with contextlib.suppress(Exception):
+                signal.signal(signal.SIGTERM, previous_sigterm)  # type: ignore[arg-type]
     elapsed = dt.datetime.now() - started
     if ret != 0:
         logging.error(

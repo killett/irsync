@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import pytest
 
 from irsync.diff import (
@@ -371,6 +374,58 @@ class TestComputeChanges:
         assert "old.lnk" in changes.deleted
         assert "new.lnk" in changes.created
 
+    def test_8th_m2_added_type_o_inode_appears_in_created(self):
+        # 8th-M2 (consistency follow-up to 7th-NEW-H1): the type-"l"
+        # silent-skip fix added "l" to the deleted/created comprehensions
+        # but left "o" out. Today snapshot_tree filters type "o" unless
+        # include_other=True, so this is latent. But the asymmetry is the
+        # exact same class of bug — make the filter consistent so a
+        # future config change doesn't silently lose visibility on
+        # added/removed sockets / FIFOs / devices.
+        before: list = []
+        after = [_row(ino=900, type="o", path="control.sock")]
+        changes = compute_changes(before, after)
+        assert "control.sock" in changes.created, (
+            f"added type-'o' inode must appear in created; got {changes.created!r}"
+        )
+        assert changes.any_changes()
+
+    def test_8th_m2_deleted_type_o_inode_appears_in_deleted(self):
+        before = [_row(ino=901, type="o", path="legacy.sock")]
+        after: list = []
+        changes = compute_changes(before, after)
+        assert "legacy.sock" in changes.deleted, (
+            f"removed type-'o' inode must appear in deleted; got {changes.deleted!r}"
+        )
+        assert changes.any_changes()
+
+    def test_8th_type_change_at_same_path_does_not_silently_lose_path(self):
+        # NEW-H4 defensive code: an inode that's type "f" in before and
+        # type "d" in after at the same path. Physically impossible IRL
+        # (changing inode type requires unlink+creat which gets a new
+        # inode), but the code at diff.py:154-161 defensively logs a
+        # warning and `continue`s in compute_moves WITHOUT adding to
+        # consumed. Then compute_changes' shared-loop sees same path on
+        # both sides → only_in_before / only_in_after empty → and the
+        # modification gate is skipped because a["type"] == "d".
+        # Result: the path goes invisible and any_changes() returns
+        # False. A defensive code path that silently loses data.
+        # Fix: when shared-loop encounters b["type"] != a["type"], treat
+        # the shared path as both deleted (under old type) and created
+        # (under new type) so rsync re-syncs it.
+        before = [_row(ino=950, type="f", size=10, mtime_ns=1_000, path="weird")]
+        after = [_row(ino=950, type="d", size=4096, mtime_ns=2_000, path="weird")]
+        changes = compute_changes(before, after)
+        assert changes.any_changes(), (
+            "type-change at same path must NOT short-circuit the backup"
+        )
+        assert "weird" in changes.deleted, (
+            f"type-change path must appear in deleted; got {changes.deleted!r}"
+        )
+        assert "weird" in changes.created, (
+            f"type-change path must appear in created; got {changes.created!r}"
+        )
+
     def test_hardlink_path_drop_appears_in_deleted(self):
         # NEW-H4: hardlinked file with one of its paths removed. Inode stays
         # in both indices; compute_moves skips hardlinks; but the dropped
@@ -490,6 +545,100 @@ class TestComputeChanges:
         )
         assert "reused.txt" in changes.created, (
             "the reused-inode new path must be created on dest"
+        )
+
+    def test_8th_kernel_actually_reuses_freed_inode_and_btime_gate_refuses(
+        self, tmp_path
+    ):
+        # 8th-pass: the existing 7th-pass NFS-sim test forges an after-row
+        # to simulate inode reuse; this complement triggers an ACTUAL
+        # kernel inode reuse via unlink+creat. The new file's btime is
+        # set fresh by the allocator even when we force size+mtime to
+        # match — that's the whole point of the 6th-pass btime gate.
+        # Verify the gate refuses the false move on a real reuse event.
+        # The kernel doesn't guarantee reuse, so skip if not observed
+        # within a small budget (overwhelmingly likely on tmpfs/ext4).
+        from irsync.snapshot import snapshot_tree
+
+        root = tmp_path / "tree"
+        root.mkdir()
+        original = root / "A.bin"
+        original.write_bytes(b"first allocation, eleven b")
+        before_rows = snapshot_tree(root)
+        original_row = next(r for r in before_rows if r["path"] == "A.bin")
+        target_ino = original_row["ino"]
+        target_size = original_row["size"]
+        target_mtime_ns = original_row["mtime_ns"]
+        target_btime_ns = original_row["btime_ns"]
+
+        if target_btime_ns < 0:
+            pytest.skip(
+                "statx btime unavailable on this filesystem; the gate falls "
+                "back to size+mtime alone, which is documented to accept the "
+                "false move on a same-second reuse event"
+            )
+
+        # Control: confirm the FS actually reports distinct btime values
+        # for consecutive file creates. tmpfs and some older ext4 setups
+        # report btime == mtime, which means our forced os.utime would
+        # also retro-set btime — defeating the test. If we can't observe
+        # btime advancing across two real creates, skip rather than
+        # produce a false negative.
+        from irsync.statx import btime_ns as _btime_ns
+
+        probe_a = root / ".btime_probe_a"
+        probe_a.write_bytes(b"x")
+        bt_a = _btime_ns(probe_a)
+        probe_b = root / ".btime_probe_b"
+        probe_b.write_bytes(b"y")
+        bt_b = _btime_ns(probe_b)
+        probe_a.unlink()
+        probe_b.unlink()
+        if bt_a < 0 or bt_b < 0 or bt_a == bt_b:
+            pytest.skip(
+                f"FS does not produce distinct btimes for consecutive creates "
+                f"(probe_a={bt_a}, probe_b={bt_b}); the btime gate can't "
+                "distinguish reuse here, falls back to size+mtime"
+            )
+
+        original.unlink()
+        # Try to provoke kernel reuse by creating new files in the same
+        # directory until one inherits the freed inode. Match the
+        # original's size and force same mtime so size+mtime CAN'T
+        # rule out the false move; the btime field is what must save us.
+        reuse_path: Path | None = None
+        for n in range(8):
+            candidate = root / f"B{n}.bin"
+            candidate.write_bytes(b"\x00" * target_size)
+            os.utime(
+                candidate, ns=(target_mtime_ns, target_mtime_ns), follow_symlinks=False
+            )
+            if int(candidate.lstat().st_ino) == target_ino:
+                reuse_path = candidate
+                break
+            candidate.unlink()  # didn't reuse; try again
+
+        if reuse_path is None:
+            pytest.skip("kernel did not reuse the freed inode within budget")
+
+        after_rows = snapshot_tree(root)
+        reused_row = next(
+            r for r in after_rows if r["ino"] == target_ino and r["path"] != "A.bin"
+        )
+        assert reused_row["btime_ns"] != target_btime_ns, (
+            "kernel reuse should produce a fresh btime — if these match, the "
+            "test environment doesn't support btime properly and the test "
+            "isn't actually exercising the 6th-pass defense"
+        )
+
+        changes = compute_changes(before_rows, after_rows)
+        assert changes.file_moves == [], (
+            "real kernel inode reuse with same size+mtime but fresh btime "
+            f"must NOT be treated as a rename; got {changes.file_moves!r}"
+        )
+        assert "A.bin" in changes.deleted, "freed path must be deleted from dest"
+        assert reuse_path.relative_to(root).as_posix() in changes.created, (
+            "new file at reused inode must be created on dest"
         )
 
     def test_7th_real_rename_via_actual_syscalls_optimizes_as_a_move(self, tmp_path):

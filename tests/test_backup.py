@@ -327,6 +327,79 @@ class TestOrphanTempfileCleanup:
         # And it never made it to dest.
         assert not (dest / orphan.name).exists()
 
+    def test_8th_m1_pager_subprocess_starts_new_session(self, monkeypatch):
+        # 8th-M1: parity with run_real_sync's 7th-pass session isolation —
+        # the `less` subprocess that pages the diff preview must also be
+        # detached, so a SIGKILL of the parent doesn't leave less attached
+        # to the parent's controlling tty as a zombie / orphan.
+        from irsync import backup as backup_mod
+
+        captured: dict[str, object] = {}
+
+        class _FakeProc:
+            def communicate(self, input=None):
+                return ("", "")
+
+            def wait(self, timeout=None):
+                return 0
+
+        def _fake_popen(cmd, **kwargs):
+            captured["kwargs"] = kwargs
+            return _FakeProc()
+
+        monkeypatch.setattr(backup_mod.shutil, "which", lambda name: "/usr/bin/less")
+        monkeypatch.setattr(backup_mod.subprocess, "Popen", _fake_popen)
+        backup_mod._page_output("preview text")
+        kwargs = captured.get("kwargs", {})
+        assert kwargs.get("start_new_session") is True, (
+            "less pager must run in its own session/pgrp so a parent "
+            "SIGKILL doesn't leave it zombied on the parent's tty"
+        )
+
+    def test_8th_h1_orphan_snap_tempfile_at_dest_root_also_cleaned(
+        self, src_dest, basic_options
+    ):
+        # 8th-NEW-H1 regression: 7th-M1 flipped _persist_snapshots to write
+        # the dest snapshot first. If the process dies between mkstemp and
+        # os.replace during the dest write, an orphan .irsync-snap-* lands
+        # at dest_root and nothing reaps it: rsync excludes the anchored
+        # /.irsync-snap-* pattern, and _cleanup_orphan_tempfiles only
+        # scanned src_root. The dest tempfile then accumulates indefinitely.
+        src, dest = src_dest
+        from irsync.snapshot import SNAPSHOT_TEMPFILE_PREFIX
+
+        # Seed a baseline so the next run takes the snapshot/diff path.
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+
+        dest_orphan = (
+            dest / f"{SNAPSHOT_TEMPFILE_PREFIX}leftover_from_killed_dest_write"
+        )
+        dest_orphan.write_text("garbage from a kill mid dest-snapshot-write")
+        assert dest_orphan.exists()
+
+        # Need something to backup so the run actually goes through the
+        # cleanup path (a no-changes run still cleans, but be explicit).
+        (src / "trigger_change.bin").write_bytes(b"trigger")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert not dest_orphan.exists(), (
+            "orphan .irsync-snap-* tempfile at dest_root must be cleaned up — "
+            "rsync excludes the anchored pattern so without an explicit cleanup "
+            "call, the orphan accumulates forever"
+        )
+
 
 class TestSubdirFileWithSnapshotName:
     def test_subdir_file_named_like_snapshot_is_backed_up(

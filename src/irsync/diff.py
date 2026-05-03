@@ -358,22 +358,23 @@ def compute_changes(
 
     before_keys = set(before.keys())
     after_keys = set(after.keys())
-    # Include "l" so brand-new and removed symlinks fire any_changes() and
-    # land in the rsync preview. Without "l" here, ln -s of a fresh link
-    # (or rm of an existing one) leaves the after-only / before-only inode
-    # filtered out, the parent dir's modification is suppressed because
-    # type "d" is excluded from the modification gate, and the entire
-    # backup short-circuits — silent divergence (7th-NEW-H1).
+    # Include every snapshotted inode type so brand-new and removed
+    # entries fire any_changes() and land in the rsync preview. Without
+    # "l" here (7th-NEW-H1), ln -s of a fresh link silently
+    # short-circuited the backup. Without "o" here (8th-M2), the same
+    # silent-skip pattern was latent for sockets / FIFOs / devices when
+    # include_other=True. Anything that snapshot_tree records belongs
+    # in the diff so rsync handles it.
     deleted_paths = [
         p
         for k, e in before.items()
-        if k not in after_keys and e["type"] in ("d", "f", "l")
+        if k not in after_keys and e["type"] in ("d", "f", "l", "o")
         for p in e["paths"]
     ]
     created_paths = [
         p
         for k, e in after.items()
-        if k not in before_keys and e["type"] in ("d", "f", "l")
+        if k not in before_keys and e["type"] in ("d", "f", "l", "o")
         for p in e["paths"]
     ]
 
@@ -396,7 +397,19 @@ def compute_changes(
         shared_paths = b["paths"] & a["paths"]
         deleted_paths.extend(only_in_before)
         created_paths.extend(only_in_after)
-        if (
+        if shared_paths and b["type"] != a["type"]:
+            # 8th-pass defensive fix: NEW-H4 type-change at the SAME
+            # inode + path is physically impossible (changing inode
+            # type requires unlink+creat which gets a new inode), but
+            # compute_moves' defensive `continue` left the shared-loop
+            # to handle the case — and the modification gate below
+            # was skipping it whenever either side was a directory,
+            # leaving the path invisible. Force it through both
+            # deleted (under old type) and created (under new type)
+            # so rsync re-syncs it.
+            deleted_paths.extend(shared_paths)
+            created_paths.extend(shared_paths)
+        elif (
             shared_paths
             and b["type"] != "d"
             and a["type"] != "d"
