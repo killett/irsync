@@ -12,8 +12,9 @@ from irsync.paths import ensure_local_dir, is_rsync_remote
 class Options:
     """Path knobs and defaults for the backup workflow.
 
-    Mirrors the configuration block at the top of the original ``srsync`` script.
-    Keep this purely declarative — runtime decisions live in :mod:`irsync.backup`.
+    Holds the drive-letter base directory, ``~`` / ``mypython`` shortcuts,
+    default exclude list, and per-run error cap. Keep this purely
+    declarative — runtime decisions live in :mod:`irsync.backup`.
     """
 
     base_dir: Path
@@ -48,7 +49,7 @@ class Options:
 
     @classmethod
     def from_defaults(cls) -> Options:
-        """Build an :class:`Options` from the same defaults srsync uses on this machine."""
+        """Build an :class:`Options` with the conventional defaults: drive-letter shortcuts under ``/media/<user>``, ``~`` for the home directory, and ``mypython`` for the Python project tree."""
         homedir = Path.home().resolve()
         username = homedir.name
         base_dir = Path("/") / "media" / username
@@ -78,8 +79,10 @@ def resolve_endpoints(
 ) -> Endpoints:
     """Map raw CLI args into resolved endpoints, applying drive-letter shortcuts.
 
-    Mirrors the routing logic from ``srsync.check_args_and_rsync_once`` (lines 340-413
-    of the original script).
+    A single-letter source like ``G`` expands to ``<base_dir>/G`` →
+    ``<base_dir>/G_backup``; ``~`` expands to the home directory and its
+    configured backup; ``mypython`` to the Python tree and its backup.
+    Anything else is taken as a literal path or rsync remote (``host:/path``).
 
     Args:
         source_arg: Raw source argument from the user.

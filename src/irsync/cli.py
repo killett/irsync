@@ -69,7 +69,7 @@ def _build_parser(
     parser.add_argument(
         "--no-snapshot",
         action="store_true",
-        help="Skip snapshot/diff/replay; behave exactly like the original srsync wrapper.",
+        help="Skip the snapshot/diff/replay layer and run rsync directly against the source and destination.",
     )
     parser.add_argument(
         "--snapshot-only",

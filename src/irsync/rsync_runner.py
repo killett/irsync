@@ -34,17 +34,19 @@ def build_rsync_command(
     ssh_port: int | None = None,
     ssh_key: str | Path | None = None,
 ) -> list[str]:
-    """Construct the rsync command line that mirrors the original ``srsync`` defaults.
+    """Construct the rsync command line for a backup run.
 
-    Always passes ``--exclude=<SNAPSHOT_FILENAME>`` so the inode snapshot is
-    managed by irsync, not by rsync.
+    Uses ``--sparse -avhP -i --stats --one-file-system --delete-before`` and
+    anchored excludes for the three reserved-namespace files (snapshot,
+    lockfile, snapshot tempfiles) so the inode snapshot is managed by
+    irsync, not by rsync.
 
     Args:
         source: Source endpoint (local path with trailing slash, or ``host:/path/``).
         dest: Destination endpoint.
         dry_run: If True, append ``--dry-run``.
         exclude_dirs: Directory names to pass with ``--exclude``.
-        no_exclude: If True, ignore ``exclude_dirs`` (mirrors srsync's ``--no-exclude``).
+        no_exclude: If True, ignore ``exclude_dirs`` and transfer everything under the source root (other than the reserved-namespace files).
         ssh_port: Optional SSH port for remote endpoints.
         ssh_key: Optional SSH key path for remote endpoints.
 
