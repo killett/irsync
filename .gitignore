@@ -15,3 +15,7 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .pixi/
+
+.claude-project-id
+
+.sandbox_settings.json
