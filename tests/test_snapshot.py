@@ -224,6 +224,17 @@ class TestF5DeepTreeWalk:
         # keep the total path length well under PATH_MAX (~4096): tmp_path
         # prefix (~50) + 1500 × "a/" (3000) = ~3050.
         depth = 1500
+        # Deep-tree survival is only reachable where the OS lets us *build*
+        # such a path. macOS/BSD PATH_MAX is 1024, far below the ~3 KB a
+        # 1500-deep path needs, so tree creation (not irsync) would fail
+        # there; skip rather than assert an OS limit we don't control.
+        needed = len(str(tmp_path)) + depth * 2  # each level adds "/a"
+        try:
+            path_max = os.pathconf(tmp_path, "PC_PATH_MAX")
+        except (OSError, ValueError):
+            path_max = 4096
+        if needed >= path_max:
+            pytest.skip(f"OS PATH_MAX ({path_max}) can't hold a {depth}-deep path")
         cur = tmp_path
         for _ in range(depth):
             cur = cur / "a"
