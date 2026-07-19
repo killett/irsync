@@ -19,3 +19,7 @@ htmlcov/
 .claude-project-id
 
 .sandbox_settings.json
+
+# Local dev-process docs — intentionally not published (restored from backup)
+CLAUDE.md
+PROGRESS.md
