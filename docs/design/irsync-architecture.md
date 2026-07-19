@@ -1,15 +1,13 @@
 # irsync — architecture & design
 
-This is the durable architecture-and-design reference for `irsync`. It is the
-document pointed at by `PROGRESS.md`; it stands alone and does not depend on any
-handoff note.
+This is the durable architecture-and-design reference for `irsync`. It stands
+alone as the canonical description of the design.
 
 ## Overview
 
 `irsync` is a rename-aware Python wrapper around `rsync`, living at
 `src/irsync/`. It exists to solve a specific pain point with the user's previous
-tool, `srsync` (a thin `rsync --delete-before` wrapper still kept on disk at
-`/workspace/srsync` for historical reference): when files were renamed or moved
+tool, `srsync` (a thin `rsync --delete-before` wrapper): when files were renamed or moved
 on the source drive, plain rsync would **delete-and-retransfer** the data
 instead of just renaming the file on the destination. On multi-TB drives that is
 brutally expensive.
@@ -90,12 +88,9 @@ history; they are preserved exactly.
 
 ### 1. Unified replacement for srsync, not a wrapper or pre-step
 
-irsync subsumes srsync entirely. The original `srsync` script and
-`inode_compare.py` stay on disk as historical reference but are **not** imported
-by the package. Reference scripts (`srsync`, `inode_compare.py`,
-`make_random_tree.py`, `make_random_moves.py`, `univ_defs.py`) are excluded from
-ruff, mypy, and pre-commit. If you delete the references, nothing in
-`src/irsync/` breaks.
+irsync subsumes srsync entirely; it is a standalone package with no dependency
+on the original `srsync` script. Everything the tool needs lives under
+`src/irsync/`.
 
 ### 2. Source-side snapshot is the source of truth; dest-side is a recovery aid
 

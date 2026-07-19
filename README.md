@@ -11,39 +11,41 @@ no source changes are detected at all, the backup drive is never accessed.
 ## Installation
 
 ```bash
-pixi install
+pip install irsync
 ```
 
-`rsync` is provided via the pixi environment. To run irsync on a system where
-rsync is installed natively, just point `python -m irsync` at it.
+`irsync` calls the system `rsync` binary, so `rsync` must be installed and on
+your `PATH`. It has no other runtime dependencies (standard library only).
 
 ## Quick usage
 
+Installation puts an `irsync` command on your `PATH` (equivalently,
+`python -m irsync`):
+
 ```bash
 # First backup of a drive: snapshots both sides, then runs rsync.
-pixi run python -m irsync /mnt/data /mnt/data_backup --yes
+irsync /mnt/data /mnt/data_backup --yes
 
 # Subsequent run with files renamed on /mnt/data:
-# inode diff is computed, the renames are replayed on /mnt/data_backup using
-# os.rename, and rsync handles only the actual content changes.
-pixi run python -m irsync /mnt/data /mnt/data_backup --yes
+# the inode diff is computed, the renames are replayed on /mnt/data_backup
+# using os.rename, and rsync handles only the actual content changes.
+irsync /mnt/data /mnt/data_backup --yes
 
-# Subsequent run with no source changes: backup drive is never touched.
-pixi run python -m irsync /mnt/data /mnt/data_backup --yes
+# Subsequent run with no source changes: the backup drive is never touched.
+irsync /mnt/data /mnt/data_backup --yes
 
 # Force a full rsync run even when the snapshot says nothing changed.
-pixi run python -m irsync /mnt/data /mnt/data_backup --yes --force
+irsync /mnt/data /mnt/data_backup --yes --force
 
 # Take a baseline snapshot without backing up (e.g. before a big reorg).
-pixi run python -m irsync /mnt/data --snapshot-only
+irsync /mnt/data --snapshot-only
 
-# Skip the inode logic entirely and behave like the original srsync.
-pixi run python -m irsync /mnt/data /mnt/data_backup --no-snapshot
+# Skip the inode logic entirely and run a plain delete-before rsync.
+irsync /mnt/data /mnt/data_backup --no-snapshot
 ```
 
 Drive-letter shorthand (`G`), `~` for home, `mypython` for the Python source
-directory, and `ALL` for every configured drive are also supported, mirroring
-the original `srsync` script.
+directory, and `ALL` for every configured drive are also supported.
 
 ## Project structure
 
@@ -58,11 +60,11 @@ src/irsync/
   backup.py         # the orchestrator: snapshot → diff → replay → rsync → persist
   cli.py            # argparse CLI
 tests/              # pytest unit + end-to-end tests
-srsync              # legacy reference script (not imported)
-inode_compare.py    # legacy reference script (not imported)
 ```
 
-## Dev tasks
+## Development
+
+This project uses [pixi](https://pixi.sh) for the dev environment:
 
 ```bash
 pixi run test         # pytest
@@ -71,3 +73,7 @@ pixi run format       # ruff format
 pixi run typecheck    # mypy --strict
 pixi run pre-commit run --all-files
 ```
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
