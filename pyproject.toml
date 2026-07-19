@@ -1,10 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "irsync"
-requires-python = ">=3.12,<3.14"
+dynamic = ["version"]
+description = "Rename-aware rsync wrapper that uses inode snapshots to skip retransfer of moved files."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Emmy Killett", email = "57272627+killett@users.noreply.github.com" }]
+keywords = ["rsync", "backup", "inode", "rename", "snapshot"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Archiving :: Backup",
+    "Typing :: Typed",
+]
 dependencies = []
 
-[tool.ruff]
-extend-exclude = ["srsync", "inode_compare.py", "make_random_moves.py", "make_random_tree.py", "univ_defs.py"]
+[project.scripts]
+irsync = "irsync.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff", "mypy"]
+
+[project.urls]
+Homepage = "https://github.com/killett/irsync"
+Repository = "https://github.com/killett/irsync"
+Issues = "https://github.com/killett/irsync/issues"
+
+[tool.hatch.version]
+path = "src/irsync/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/irsync"]
 
 [tool.ruff.lint]
 select = [
@@ -41,18 +78,11 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 mypy_path = "src"
-exclude = ["^srsync$", "^inode_compare\\.py$", "^make_random_moves\\.py$", "^make_random_tree\\.py$", "^univ_defs\\.py$"]
-
-# Uncomment when using rasterio or netCDF4:
-# [[tool.mypy.overrides]]
-# module = ["rasterio.*", "netCDF4.*"]
-# ignore_missing_imports = true
 
 [[tool.mypy.overrides]]  # Tests often have untyped functions and use dynamic features, so relax mypy rules for them.
 module = ["tests.*"]
 strict = false
 warn_return_any = false
-# Claude Opus 4.7 says: the test override has strict = false but that doesn't disable specific checks already enabled globally. So we also need to disable these individually:
 disallow_untyped_defs = false
 disallow_untyped_calls = false
 disallow_any_generics = false
@@ -65,7 +95,3 @@ pythonpath = ["src"]
 
 [tool.coverage.run]
 source = ["src"]
-
-# pixi is used for package management, but if you switch to using uv, it's a good idea to uncomment these lines for security.
-# [tool.uv]
-# exclude-newer = "7 days"
