@@ -215,6 +215,12 @@ def run_backup(
 
     Returns:
         0 on success (or when there was no work to do), non-zero on error.
+
+    Raises:
+        EndpointNotMounted: If the source or destination's drive is not
+            mounted and ``args.allow_unmounted`` is not set. Callers that
+            iterate several drives (:func:`run_all_backups`) catch this and
+            treat it as a skip.
     """
     # --snapshot-only doesn't need a destination at all — it just records the
     # current state of the source for use as a future baseline. Route around
@@ -259,7 +265,12 @@ def run_backup(
 def _run_snapshot_only(
     *, source_arg: str, options: Options, args: argparse.Namespace
 ) -> int:
-    """Take a snapshot of ``source_arg`` and write it next to the source. No dest."""
+    """Take a snapshot of ``source_arg`` and write it next to the source. No dest.
+
+    Raises:
+        EndpointNotMounted: If the source's drive is not mounted and
+            ``args.allow_unmounted`` is not set.
+    """
     from irsync.paths import ensure_local_dir
 
     # Resolve drive-letter / ~ / mypython shortcuts manually so the shorthand
@@ -276,7 +287,7 @@ def _run_snapshot_only(
         src = ensure_local_dir(arg)
 
     try:
-        check_mounted(src, options.base_dir)
+        check_mounted(src, options.base_dir, gate_outside_base=args.require_mount)
     except EndpointNotMounted:
         if not args.allow_unmounted:
             raise

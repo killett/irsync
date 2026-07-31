@@ -1217,6 +1217,59 @@ class TestMountGate:
         )
         assert rc == 0
 
+    def test_snapshot_only_unmounted_source_under_base_dir_refuses_before_lock(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # Acceptance criterion 4: --snapshot-only must run the same gate,
+        # in the same order (before _source_lock), as a regular backup.
+        # Same fixture-and-monkeypatch shape as
+        # test_unmounted_source_refuses_and_writes_no_lockfile, but routed
+        # through the --snapshot-only path (no destination).
+        from irsync.preflight import EndpointNotMounted
+
+        src, _dest = src_dest
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+        basic_options.base_dir = src.parent
+
+        with pytest.raises(EndpointNotMounted):
+            run_backup(
+                source_arg=str(src),
+                destination_arg=None,
+                options=basic_options,
+                args=_args(snapshot_only=True),
+            )
+
+        assert not (src / LOCKFILE_NAME).exists(), (
+            "the gate must run before the lock is taken, even for --snapshot-only"
+        )
+
+    def test_require_mount_extends_snapshot_only_gate_outside_base_dir(
+        self, tmp_path, basic_options, make_tree, monkeypatch
+    ):
+        # Regression for the asymmetry flagged in review: run_backup's gate
+        # honors --require-mount (gate_outside_base=args.require_mount), but
+        # _run_snapshot_only's gate used to hardcode gate_outside_base=False,
+        # so --require-mount was silently inert for --snapshot-only runs
+        # against a path outside base_dir. Source here is deliberately NOT
+        # under basic_options.base_dir.
+        from irsync.preflight import EndpointNotMounted
+
+        src = tmp_path / "external_src"
+        make_tree(src, num_files=3, depth=1)
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+
+        with pytest.raises(EndpointNotMounted):
+            run_backup(
+                source_arg=str(src),
+                destination_arg=None,
+                options=basic_options,
+                args=_args(snapshot_only=True, require_mount=True),
+            )
+
+        assert not (src / LOCKFILE_NAME).exists(), (
+            "the gate must run before the lock is taken"
+        )
+
 
 class TestRunAllBackupsMountSkips:
     def test_unmounted_drive_counts_as_missing_not_error(
