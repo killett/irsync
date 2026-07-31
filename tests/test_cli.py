@@ -74,3 +74,73 @@ def test_5th_m2_force_with_no_snapshot_rejected_at_parse_time(tmp_path):
     assert "--force" in combined and "--no-snapshot" in combined, (
         f"error message should mention both flags; got: {combined!r}"
     )
+
+
+def test_missing_source_path_exits_cleanly(tmp_path):
+    # Reproduced against the old code: FileNotFoundError escaped cli.main as
+    # a traceback and the exit code was flattened to 1.
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "irsync",
+            str(tmp_path / "definitely_missing"),
+            str(dest),
+            "--yes",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=ENV,
+    )
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+
+
+def test_unreadable_destination_exits_cleanly(tmp_path, make_tree):
+    # Carried forward from Task 3: UnsafeDestination (raised by
+    # foreign_dest_entries when the destination cannot be read) was left
+    # uncaught, so an unreadable destination tracebacked with exit 1. This
+    # is the single-drive path; run_all_backups already has its own
+    # UnsafeDestination handling for ALL runs (untouched by this task).
+    src = tmp_path / "src"
+    make_tree(src, num_files=3, depth=1)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    dest.chmod(0o000)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "irsync", str(src), str(dest), "--yes"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=ENV,
+        )
+    finally:
+        dest.chmod(0o755)
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+
+
+def test_missing_rsync_binary_exits_cleanly(tmp_path):
+    # Reproduced against the old code: FileNotFoundError from subprocess
+    # escaped run_dry_run/run_real_sync as a stack trace, exit code 1.
+    # sys.executable is an absolute path, so python itself still launches
+    # with PATH pointed at a directory that has no rsync on it.
+    src = tmp_path / "src"
+    src.mkdir()
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    env = {**ENV, "PATH": str(tmp_path)}
+    result = subprocess.run(
+        [sys.executable, "-m", "irsync", str(src), str(dest), "--yes"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    assert "rsync" in (result.stdout + result.stderr).lower()

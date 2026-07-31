@@ -4,8 +4,10 @@ import pytest
 
 from irsync.preflight import (
     EndpointNotMounted,
+    RsyncUnavailable,
     UnsafeDestination,
     check_mounted,
+    check_rsync_available,
     foreign_dest_entries,
     mount_gate_root,
 )
@@ -112,3 +114,15 @@ class TestForeignDestEntries:
                 foreign_dest_entries(dest)
         finally:
             dest.chmod(0o755)
+
+
+class TestRsyncAvailable:
+    def test_missing_rsync_raises(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        with pytest.raises(RsyncUnavailable) as excinfo:
+            check_rsync_available()
+        assert "rsync" in str(excinfo.value)
+
+    def test_present_rsync_passes(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/rsync")
+        check_rsync_available()

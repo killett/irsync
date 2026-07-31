@@ -157,14 +157,31 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    if args.source_arg.strip().upper() == "ALL":
-        if args.destination_arg:
-            parser.error("Destination is not allowed when SOURCE is 'ALL'.")
-        return run_all_backups(options=options, args=args)
-
-    return run_backup(
-        source_arg=args.source_arg,
-        destination_arg=args.destination_arg,
-        options=options,
-        args=args,
+    from irsync.backup import EXIT_REFUSED
+    from irsync.preflight import (
+        EndpointNotMounted,
+        RsyncUnavailable,
+        UnsafeDestination,
     )
+
+    try:
+        if args.source_arg.strip().upper() == "ALL":
+            if args.destination_arg:
+                parser.error("Destination is not allowed when SOURCE is 'ALL'.")
+            return run_all_backups(options=options, args=args)
+        return run_backup(
+            source_arg=args.source_arg,
+            destination_arg=args.destination_arg,
+            options=options,
+            args=args,
+        )
+    except (
+        EndpointNotMounted,
+        UnsafeDestination,
+        RsyncUnavailable,
+        FileNotFoundError,
+        NotADirectoryError,
+        ValueError,
+    ) as e:
+        logging.error("%s", e)
+        return EXIT_REFUSED

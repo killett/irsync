@@ -10,6 +10,7 @@ before any file is created.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 
@@ -129,3 +130,16 @@ def foreign_dest_entries(dest_root: Path) -> list[str]:
         if name not in (SNAPSHOT_FILENAME, LOCKFILE_NAME)
         and not name.startswith(SNAPSHOT_TEMPFILE_PREFIX)
     ]
+
+
+def check_rsync_available() -> None:
+    """Raise :class:`RsyncUnavailable` if the rsync binary is not on PATH.
+
+    Raises:
+        RsyncUnavailable: If ``shutil.which`` cannot find rsync.
+    """
+    if shutil.which("rsync") is None:
+        raise RsyncUnavailable(
+            "rsync was not found on PATH. Install it (on Debian/Ubuntu: "
+            "sudo apt install rsync) and try again."
+        )

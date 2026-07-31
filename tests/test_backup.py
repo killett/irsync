@@ -1522,3 +1522,55 @@ class TestFirstRunPreview:
         text = _format_first_run_preview(rows, tmp_path / "src", None, 0)
         assert "not checked" in text
         assert "0 existing entries" not in text
+
+
+class TestCleanRefusals:
+    def test_missing_rsync_binary_raises_before_touching_anything(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # Reproduced against the old code: FileNotFoundError from subprocess
+        # escaped run_dry_run/run_real_sync as a stack trace, exit code 1.
+        #
+        # run_backup RAISES here rather than returning a code, the same
+        # design as EndpointNotMounted/UnsafeDestination: it's cli.main's
+        # boundary (tested at the process level in test_cli.py) that turns
+        # this into EXIT_REFUSED for a single-drive run. Asserting rc ==
+        # EXIT_REFUSED directly against run_backup here would be testing for
+        # behavior the function deliberately does not have.
+        from irsync.preflight import RsyncUnavailable
+
+        src, dest = src_dest
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        with pytest.raises(RsyncUnavailable):
+            run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert not (src / LOCKFILE_NAME).exists(), (
+            "the rsync-availability check must run before the lock is taken"
+        )
+
+    def test_read_only_source_root_refuses_without_traceback(
+        self, src_dest, basic_options
+    ):
+        # Reproduced against the old code: PermissionError from _source_lock
+        # opening .irsync.lock escaped as a stack trace.
+        src, dest = src_dest
+        src.chmod(0o555)
+        try:
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+        finally:
+            src.chmod(0o755)
+        assert rc == EXIT_REFUSED

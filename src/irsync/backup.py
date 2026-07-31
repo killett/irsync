@@ -20,6 +20,7 @@ from irsync.preflight import (
     EndpointNotMounted,
     UnsafeDestination,
     check_mounted,
+    check_rsync_available,
     foreign_dest_entries,
 )
 from irsync.replay import CrossDeviceMoveError, apply_moves
@@ -291,7 +292,13 @@ def run_backup(
             destination cannot be read to check whether it is empty.
             Callers that iterate several drives (:func:`run_all_backups`)
             catch this and count it as a real error, not a skip.
+        RsyncUnavailable: If the rsync binary is not on PATH. Checked
+            up front so a missing rsync install surfaces as a clean refusal
+            rather than a ``FileNotFoundError`` traceback from deep inside
+            ``run_dry_run``/``run_real_sync``.
     """
+    check_rsync_available()
+
     # --snapshot-only doesn't need a destination at all — it just records the
     # current state of the source for use as a future baseline. Route around
     # resolve_endpoints so the user can snapshot any local directory without
@@ -330,6 +337,14 @@ def run_backup(
             )
     except BlockingIOError:
         return _log_lock_conflict(src_root)
+    except PermissionError as e:
+        logging.error(
+            "Cannot write to the source root %s (%s). irsync needs to create "
+            "its lockfile and snapshot there.",
+            src_root,
+            e,
+        )
+        return EXIT_REFUSED
 
 
 def _run_snapshot_only(
@@ -341,6 +356,9 @@ def _run_snapshot_only(
         EndpointNotMounted: If the source's drive is not mounted and
             ``args.allow_unmounted`` is not set.
     """
+    # PermissionError from _source_lock is caught below and turned into
+    # EXIT_REFUSED rather than documented here as a raise: it never escapes
+    # this function.
     from irsync.paths import ensure_local_dir
 
     # Resolve drive-letter / ~ / mypython shortcuts manually so the shorthand
@@ -373,6 +391,14 @@ def _run_snapshot_only(
             _atomic_write_snapshot(rows, src, src / SNAPSHOT_FILENAME)
     except BlockingIOError:
         return _log_lock_conflict(src)
+    except PermissionError as e:
+        logging.error(
+            "Cannot write to the source root %s (%s). irsync needs to create "
+            "its lockfile and snapshot there.",
+            src,
+            e,
+        )
+        return EXIT_REFUSED
 
     logging.info(
         "Snapshot-only: wrote %d rows to %s", len(rows), src / SNAPSHOT_FILENAME
