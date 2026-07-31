@@ -477,3 +477,51 @@ class TestNestedMountBoundary:
         with caplog.at_level(logging.WARNING):
             snapshot_tree(tmp_path)
         assert caplog.records == []
+
+    def test_walk_reports_truncated_count_past_five_skipped_dirs(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # Finding 4: the "(and N more)" truncation is [:5]/len-5 here, but
+        # [:10]/len-10 for the destination gate's foreign-entries message
+        # elsewhere in the codebase — an easy off-by-one to get wrong when
+        # the two are edited independently. Pin the exact count with 7
+        # skipped dirs (5 shown, 2 "more"), same Path.lstat monkeypatch
+        # pattern as test_walk_warns_once_when_a_boundary_is_skipped.
+        names = [f"nested{i}" for i in range(7)]
+        for name in names:
+            (tmp_path / name).mkdir()
+        real_lstat = Path.lstat
+
+        def fake_lstat(self):
+            st = real_lstat(self)
+            if self.name.startswith("nested"):
+                return os.stat_result(
+                    (
+                        st.st_mode,
+                        st.st_ino,
+                        st.st_dev + 1,
+                        st.st_nlink,
+                        st.st_uid,
+                        st.st_gid,
+                        st.st_size,
+                        int(st.st_atime),
+                        int(st.st_mtime),
+                        int(st.st_ctime),
+                    )
+                )
+            return st
+
+        monkeypatch.setattr(Path, "lstat", fake_lstat)
+
+        with caplog.at_level(logging.WARNING):
+            snapshot_tree(tmp_path)
+
+        warnings = [
+            r for r in caplog.records if "separate filesystem" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "Skipped 7 path(s)" in message
+        assert message.endswith(
+            "nested0, nested1, nested2, nested3, nested4 (and 2 more)"
+        )

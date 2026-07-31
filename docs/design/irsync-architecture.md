@@ -160,7 +160,7 @@ catalogued in Appendix A.)
 ### 6. Sanity-threshold for catastrophic diffs
 
 `backup.py` refuses to proceed when `len(deleted) / len(before_rows) > 0.5`
-unless `--force`. This is a last line of defense against snapshot mismatches
+unless `--allow-massive-delete`. This is a last line of defense against snapshot mismatches
 that slipped past provenance checks, swapped source/dest arguments, or partial
 source-tree availability (e.g., a network mount went stale). The threshold is on
 `deleted` only — not `modified` or `created` — because deletions are the

@@ -1313,10 +1313,37 @@ class TestMountGate:
             "the gate must run before the lock is taken"
         )
 
+    def test_unmounted_destination_refuses_even_when_source_is_mounted(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # Hazard B: an unmounted destination fills the root filesystem.
+        # Every other TestMountGate test sets os.path.ismount to a constant,
+        # so the SOURCE check (which runs first) always raises and the
+        # DEST check is never exercised. Here only src reports as mounted,
+        # so this fails closed on the source check ONLY if the dest check
+        # were skipped entirely — it must not be.
+        from irsync.preflight import EndpointNotMounted
+
+        src, dest = src_dest
+        basic_options.base_dir = src.parent
+        monkeypatch.setattr("os.path.ismount", lambda p: str(p) == str(src))
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        with pytest.raises(EndpointNotMounted) as excinfo:
+            run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+        assert str(dest) in str(excinfo.value)
+
 
 class TestRunAllBackupsMountSkips:
     def test_unmounted_drive_counts_as_missing_not_error(
-        self, basic_options, monkeypatch
+        self, basic_options, monkeypatch, caplog
     ):
         # Contract from commit 044c036: a drive that isn't there is a skip.
         # An unmounted drive is the same situation, so it must not flip the
@@ -1331,8 +1358,20 @@ class TestRunAllBackupsMountSkips:
         monkeypatch.setattr("irsync.backup.run_backup", fake_backup)
         basic_options.all_backups = ["G", "H", "~"]
 
-        rc = run_all_backups(options=basic_options, args=_args())
+        with caplog.at_level(logging.INFO):
+            rc = run_all_backups(options=basic_options, args=_args())
         assert rc == 0
+        # rc == 0 alone would still pass if H had been appended to
+        # `successful` instead of `missing` (a bug that silently reports an
+        # unmounted drive as backed up). Pin the actual summary line so the
+        # drive is provably named under missing/skipped, not successful.
+        summary = next(
+            r.getMessage()
+            for r in caplog.records
+            if "missing/skipped" in r.getMessage()
+        )
+        assert "missing/skipped=1 (H)" in summary
+        assert "backed up=2 (G, ~)" in summary
 
 
 class TestDestinationGate:
@@ -1390,6 +1429,40 @@ class TestDestinationGate:
             args=_args(),
         )
         assert rc == 0
+
+    def test_dry_run_against_nonempty_first_run_dest_does_not_refuse(
+        self, tmp_path, make_tree, basic_options, monkeypatch
+    ):
+        # Deferred finding: --dry-run writes nothing, so it is the natural,
+        # safe way to inspect a non-empty first-run destination before
+        # deciding whether to adopt it with --allow-nonempty-dest. Blocking
+        # it at exactly the same refusal as the real run pushes users toward
+        # the flag they least want reached for reflexively.
+        src = tmp_path / "src"
+        make_tree(src, num_files=3, depth=1)
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        precious = dest / "old_backup.txt"
+        precious.write_text("irreplaceable")
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+        monkeypatch.setattr(
+            "irsync.backup.run_dry_run", lambda cmd: "dry run preview output"
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(dry_run=True),
+        )
+
+        assert rc == 0
+        # Nothing was actually modified: the destination still holds exactly
+        # the one pre-existing file, with its original content.
+        assert precious.read_text() == "irreplaceable"
+        assert [p.name for p in dest.iterdir()] == ["old_backup.txt"]
 
 
 class TestRunAllBackupsUnsafeDestination:
@@ -1610,6 +1683,50 @@ class TestCleanRefusals:
         finally:
             src.chmod(0o755)
         assert rc == EXIT_REFUSED
+
+    def test_destination_permission_error_is_not_misattributed_to_source(
+        self, tmp_path, basic_options, caplog
+    ):
+        # Reproduced against the pre-fix code: the `try` around run_backup's
+        # entire orchestrated run wrapped its `except PermissionError` around
+        # far more than lock acquisition, so a PermissionError raised deep
+        # inside the run (here: os.rename inside apply_moves, because the
+        # DEST tree is read-only) was reported as "Cannot write to the
+        # source root", even though the source was never the problem. Set up
+        # a pending rename so the second run reaches apply_moves.
+        src = tmp_path / "src"
+        dest = tmp_path / "dest"
+        src.mkdir()
+        dest.mkdir()
+        (src / "a.txt").write_text("hello")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+
+        (src / "a.txt").rename(src / "b.txt")
+        dest.chmod(0o555)
+        try:
+            with caplog.at_level(logging.ERROR):
+                rc = run_backup(
+                    source_arg=str(src),
+                    destination_arg=str(dest),
+                    options=basic_options,
+                    args=_args(),
+                )
+        finally:
+            dest.chmod(0o755)
+
+        assert rc == EXIT_REFUSED
+        assert "source root" not in caplog.text, (
+            "a destination-side PermissionError must not be reported as a "
+            "source-root problem"
+        )
+        assert str(dest) in caplog.text or "a.txt" in caplog.text
 
     def test_snapshot_only_succeeds_without_rsync_no_destination(
         self, tmp_path, make_tree, basic_options, monkeypatch

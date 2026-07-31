@@ -85,6 +85,25 @@ def _log_lock_conflict(root: Path) -> int:
     return EXIT_LOCK_HELD
 
 
+def _log_source_permission_error(root: Path, e: PermissionError) -> int:
+    """Log the "can't write to the source root" refusal and return the exit code.
+
+    Scoped to callers that know the failure genuinely happened while writing
+    to ``root`` itself (lock acquisition, or a snapshot write with no
+    destination in play) — never wrap a broader operation in
+    ``except PermissionError`` and blame the source root for whatever failed
+    inside it. A blanket handler around the orchestrator would misattribute
+    downstream (e.g. destination) permission errors to the wrong disk.
+    """
+    logging.error(
+        "Cannot write to the source root %s (%s). irsync needs to create "
+        "its lockfile and snapshot there.",
+        root,
+        e,
+    )
+    return EXIT_REFUSED
+
+
 def _atomic_write_snapshot(rows: list[Row], source_root: Path, target: Path) -> None:
     """Write rows + provenance header to ``target`` atomically (tempfile + replace).
 
@@ -337,21 +356,39 @@ def run_backup(
         return _run_backup_for_endpoints(
             endpoints=endpoints, options=options, args=args
         )
+
+    # The lock's __enter__/__exit__ are called explicitly (rather than via
+    # `with`) so lock ACQUISITION has its own try/except, scoped only to
+    # `_source_lock`'s mkdir + lockfile open. Everything downstream
+    # (_persist_snapshots writes to dest before src; apply_moves renames
+    # inside the dest tree) can also raise PermissionError, but that failure
+    # is not about the source root, so it must not be reported as one.
+    lock_cm = _source_lock(src_root)
     try:
-        with _source_lock(src_root):
-            return _run_backup_for_endpoints(
-                endpoints=endpoints, options=options, args=args
-            )
+        lock_cm.__enter__()
     except BlockingIOError:
         return _log_lock_conflict(src_root)
     except PermissionError as e:
+        return _log_source_permission_error(src_root, e)
+
+    try:
+        return _run_backup_for_endpoints(
+            endpoints=endpoints, options=options, args=args
+        )
+    except PermissionError as e:
+        # Deliberately generic: unlike the lock-acquisition case above, this
+        # PermissionError could have come from anywhere downstream (most
+        # often a read-only destination), so it must not name the source
+        # root as the culprit.
         logging.error(
-            "Cannot write to the source root %s (%s). irsync needs to create "
-            "its lockfile and snapshot there.",
-            src_root,
+            "Refusing: permission denied during the backup (%s). This may "
+            "be the source or the destination — check that irsync can "
+            "write to both.",
             e,
         )
         return EXIT_REFUSED
+    finally:
+        lock_cm.__exit__(None, None, None)
 
 
 def _run_snapshot_only(
@@ -392,20 +429,28 @@ def _run_snapshot_only(
     # `_run_backup_for_endpoints` could call `_cleanup_orphan_tempfiles` and
     # delete this run's `.irsync-snap-*` tempfile mid-write, which would make
     # `os.replace(tmp_path, target)` fail with FileNotFoundError.
+    # Same explicit-__enter__/__exit__ split as run_backup, for the same
+    # reason: lock acquisition is the only step here proven to be about the
+    # source root. There is no destination in this path, so snapshot_tree and
+    # _atomic_write_snapshot below also only ever touch src — but keeping the
+    # same structure (and the same _log_source_permission_error helper) means
+    # a future edit that adds a destination here doesn't have to rediscover
+    # this scoping.
+    lock_cm = _source_lock(src)
     try:
-        with _source_lock(src):
-            rows = snapshot_tree(src)
-            _atomic_write_snapshot(rows, src, src / SNAPSHOT_FILENAME)
+        lock_cm.__enter__()
     except BlockingIOError:
         return _log_lock_conflict(src)
     except PermissionError as e:
-        logging.error(
-            "Cannot write to the source root %s (%s). irsync needs to create "
-            "its lockfile and snapshot there.",
-            src,
-            e,
-        )
-        return EXIT_REFUSED
+        return _log_source_permission_error(src, e)
+
+    try:
+        rows = snapshot_tree(src)
+        _atomic_write_snapshot(rows, src, src / SNAPSHOT_FILENAME)
+    except PermissionError as e:
+        return _log_source_permission_error(src, e)
+    finally:
+        lock_cm.__exit__(None, None, None)
 
     logging.info(
         "Snapshot-only: wrote %d rows to %s", len(rows), src / SNAPSHOT_FILENAME
@@ -556,7 +601,12 @@ def _run_backup_for_endpoints(
     foreign: list[str] = []
     if not have_before and dest_root is not None:
         foreign = foreign_dest_entries(dest_root)
-        if foreign and not args.allow_nonempty_dest:
+        # A dry run writes nothing — it is the natural way to inspect what's
+        # at the destination before deciding whether to adopt it — so it must
+        # not be blocked by the same refusal that guards the real transfer.
+        # `foreign` is still computed unconditionally above: the first-run
+        # preview (Rule 3) reports it regardless of --dry-run.
+        if foreign and not args.allow_nonempty_dest and not args.dry_run:
             shown = ", ".join(foreign[:10])
             more = f" (and {len(foreign) - 10} more)" if len(foreign) > 10 else ""
             logging.error(
