@@ -16,7 +16,11 @@ from pathlib import Path
 from irsync.diff import Changes, compute_changes
 from irsync.options import Endpoints, Options, resolve_endpoints
 from irsync.paths import with_trailing_slash
-from irsync.preflight import EndpointNotMounted, check_mounted
+from irsync.preflight import (
+    EndpointNotMounted,
+    check_mounted,
+    foreign_dest_entries,
+)
 from irsync.replay import CrossDeviceMoveError, apply_moves
 from irsync.rsync_runner import build_rsync_command, run_dry_run, run_real_sync
 from irsync.snapshot import (
@@ -445,6 +449,27 @@ def _run_backup_for_endpoints(
                     ratio * 100,
                 )
                 return EXIT_REFUSED
+
+    # No usable baseline: this run will transfer the whole source and delete
+    # everything at the destination that is not on it. If the destination
+    # already holds data, that is the unmounted-source scenario — refuse.
+    foreign: list[str] = []
+    if not have_before and dest_root is not None:
+        foreign = foreign_dest_entries(dest_root)
+        if foreign and not args.allow_nonempty_dest:
+            shown = ", ".join(foreign[:10])
+            more = f" (and {len(foreign) - 10} more)" if len(foreign) > 10 else ""
+            logging.error(
+                "Refusing: no prior snapshot, but the destination %s already "
+                "contains %d entries: %s%s. rsync would DELETE them. This "
+                "usually means the source drive is not mounted. Pass "
+                "--allow-nonempty-dest to adopt this destination anyway.",
+                dest_root,
+                len(foreign),
+                shown,
+                more,
+            )
+            return EXIT_REFUSED
 
     # Always show the preview before confirming. In interactive mode, page it
     # through less so the user can scroll through the deletion list. In --yes

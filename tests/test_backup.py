@@ -1290,3 +1290,60 @@ class TestRunAllBackupsMountSkips:
 
         rc = run_all_backups(options=basic_options, args=_args())
         assert rc == 0
+
+
+class TestDestinationGate:
+    def test_first_backup_into_nonempty_dest_refuses_and_preserves_data(
+        self, tmp_path, make_tree, basic_options, monkeypatch
+    ):
+        # Hazard A, the reproduction that motivated this work: an unmounted
+        # source presents as an empty tree with no snapshot, and rsync's
+        # --delete-before then empties the backup. Verified against the old
+        # code: the file below was deleted and the run exited 0.
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        precious = dest / "old_backup.txt"
+        precious.write_text("irreplaceable")
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+
+        assert rc == EXIT_REFUSED
+        assert precious.read_text() == "irreplaceable"
+
+    def test_allow_nonempty_dest_permits_adoption(
+        self, tmp_path, make_tree, basic_options
+    ):
+        src = tmp_path / "src"
+        make_tree(src, num_files=3, depth=1)
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        (dest / "pre_existing.txt").write_text("adopt me")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(allow_nonempty_dest=True),
+        )
+        assert rc == 0
+
+    def test_empty_dest_first_backup_still_works(self, src_dest, basic_options):
+        # The gate must not break the ordinary first backup.
+        src, dest = src_dest
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0

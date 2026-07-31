@@ -76,6 +76,15 @@ def _build_parser(
         ),
     )
     parser.add_argument(
+        "--allow-nonempty-dest",
+        action="store_true",
+        help=(
+            "Allow a first backup (no prior snapshot) into a destination that "
+            "already contains files. Without this, irsync refuses, because "
+            "rsync --delete-before would remove them."
+        ),
+    )
+    parser.add_argument(
         "-y", "--yes", action="store_true", help="Skip the confirmation prompt."
     )
     parser.add_argument(

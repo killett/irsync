@@ -4,9 +4,12 @@ import pytest
 
 from irsync.preflight import (
     EndpointNotMounted,
+    UnsafeDestination,
     check_mounted,
+    foreign_dest_entries,
     mount_gate_root,
 )
+from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME
 
 
 class TestMountGateRoot:
@@ -78,3 +81,34 @@ class TestCheckMounted:
         monkeypatch.setattr("os.path.ismount", lambda p: False)
 
         check_mounted(base, base, gate_outside_base=True)
+
+
+class TestForeignDestEntries:
+    def test_empty_destination_returns_nothing(self, tmp_path):
+        assert foreign_dest_entries(tmp_path) == []
+
+    def test_irsync_reserved_files_do_not_count(self, tmp_path):
+        # An interrupted first backup leaves a snapshot behind. Retrying must
+        # not require an override.
+        (tmp_path / SNAPSHOT_FILENAME).write_text("{}\n")
+        (tmp_path / LOCKFILE_NAME).write_text("")
+        (tmp_path / ".irsync-snap-abc123").write_text("")
+        assert foreign_dest_entries(tmp_path) == []
+
+    def test_user_data_counts(self, tmp_path):
+        (tmp_path / "photos").mkdir()
+        (tmp_path / "notes.txt").write_text("hi")
+        assert foreign_dest_entries(tmp_path) == ["notes.txt", "photos"]
+
+    def test_missing_destination_is_empty(self, tmp_path):
+        assert foreign_dest_entries(tmp_path / "not_created_yet") == []
+
+    def test_unreadable_destination_fails_closed(self, tmp_path):
+        dest = tmp_path / "locked"
+        dest.mkdir()
+        dest.chmod(0o000)
+        try:
+            with pytest.raises(UnsafeDestination):
+                foreign_dest_entries(dest)
+        finally:
+            dest.chmod(0o755)

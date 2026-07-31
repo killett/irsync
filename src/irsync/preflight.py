@@ -88,3 +88,44 @@ def check_mounted(
             f"{gate} is not a mountpoint, so {endpoint} is not the drive it "
             "appears to be. The drive is probably not mounted."
         )
+
+
+def foreign_dest_entries(dest_root: Path) -> list[str]:
+    """Return destination-root entries that are not irsync's own files.
+
+    irsync's reserved namespace is excluded so that a destination holding
+    only a snapshot from an interrupted first backup still counts as empty
+    and can be retried without an override.
+
+    Args:
+        dest_root: The destination root to inspect. A destination that does
+            not exist yet counts as empty.
+
+    Returns:
+        Sorted names of entries that are not part of irsync's namespace.
+
+    Raises:
+        UnsafeDestination: If the destination exists but cannot be read. An
+            unreadable destination is not a proven-empty one, so this fails
+            closed rather than reporting no entries.
+    """
+    from irsync.snapshot import (
+        LOCKFILE_NAME,
+        SNAPSHOT_FILENAME,
+        SNAPSHOT_TEMPFILE_PREFIX,
+    )
+
+    try:
+        names = sorted(p.name for p in dest_root.iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    except PermissionError as e:
+        raise UnsafeDestination(
+            f"Cannot read destination {dest_root} to check whether it is empty: {e}"
+        ) from e
+    return [
+        name
+        for name in names
+        if name not in (SNAPSHOT_FILENAME, LOCKFILE_NAME)
+        and not name.startswith(SNAPSHOT_TEMPFILE_PREFIX)
+    ]
