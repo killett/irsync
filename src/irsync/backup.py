@@ -514,8 +514,8 @@ def _page_output(text: str) -> None:
         proc = subprocess.Popen(  # noqa: S603
             [pager], stdin=subprocess.PIPE, text=True, start_new_session=True
         )
+        # communicate() already writes stdin, closes it, and reaps the child.
         proc.communicate(input=text)
-        proc.wait()
     else:
         print(text)
 
