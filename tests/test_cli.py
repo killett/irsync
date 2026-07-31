@@ -42,11 +42,10 @@ def test_no_args_shows_help():
 
 def test_5th_m2_force_with_no_snapshot_rejected_at_parse_time(tmp_path):
     # NEW-M2 (5th-pass): --force only does anything inside the snapshot diff
-    # branch (the "no changes" short-circuit and the 50% deletion threshold).
-    # With --no-snapshot, both checks are bypassed and --force is silently
-    # inert — a usability footgun. Reject the combination at parse time so
-    # the user gets an immediate, clear error rather than running with one
-    # of their flags ignored.
+    # branch (the "no changes" short-circuit). With --no-snapshot, that check
+    # is bypassed and --force is silently inert — a usability footgun.
+    # Reject the combination at parse time so the user gets an immediate,
+    # clear error rather than running with one of their flags ignored.
     src = tmp_path / "src"
     src.mkdir()
     dest = tmp_path / "dest"

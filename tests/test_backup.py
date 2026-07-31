@@ -565,12 +565,12 @@ class TestSubdirFileWithSnapshotName:
 
 
 class TestCatastrophicDiffSanityCheck:
-    def test_majority_deletion_refused_without_force(
+    def test_majority_deletion_refused_without_allow_massive_delete(
         self, src_dest, basic_options, monkeypatch
     ):
         # M3 regression: if the diff says >50% of the previously-snapshotted
         # entries are gone, that almost certainly means the wrong source or a
-        # stale snapshot. Refuse to proceed without --force.
+        # stale snapshot. Refuse to proceed without --allow-massive-delete.
         src, dest = src_dest
         # First backup to seed the snapshot.
         run_backup(
@@ -597,7 +597,7 @@ class TestCatastrophicDiffSanityCheck:
             options=basic_options,
             args=_args(),
         )
-        assert rc != 0, "catastrophic diff should refuse without --force"
+        assert rc != 0, "catastrophic diff should refuse without --allow-massive-delete"
         assert calls == [], "rsync must not run when sanity check fires"
         # And the dest tree should be untouched (still has all its files).
         dest_files = [

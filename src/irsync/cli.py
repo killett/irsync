@@ -146,9 +146,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.ssh_key is not None and not Path(args.ssh_key).expanduser().is_file():
         parser.error(f"--ssh-key file does not exist: {args.ssh_key}")
     # NEW-M2 (5th-pass). --force only takes effect inside the snapshot diff
-    # branch (no-changes short-circuit + 50% deletion threshold). Combined
-    # with --no-snapshot it does nothing; reject upfront so the user notices
-    # rather than running with one of their flags silently ignored.
+    # branch (the no-changes short-circuit). Combined with --no-snapshot it
+    # does nothing; reject upfront so the user notices rather than running
+    # with one of their flags silently ignored. --allow-massive-delete has
+    # its own, identical conflict check just below.
     if args.force and args.no_snapshot:
         parser.error(
             "--force has no effect with --no-snapshot (the snapshot diff is "
