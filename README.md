@@ -52,13 +52,15 @@ directory, and `ALL` for every configured drive are also supported.
 ```
 src/irsync/
   paths.py          # is_rsync_remote, ensure_local_dir, with_trailing_slash
-  snapshot.py       # snapshot_tree, write_jsonl, read_jsonl, SNAPSHOT_FILENAME
+  snapshot.py       # snapshot_tree, write_snapshot, read_snapshot, SNAPSHOT_FILENAME
+  statx.py          # ctypes statx(2) wrapper — inode birth time (btime)
   diff.py           # compute_changes, plan_directory_moves (cycle-safe)
   replay.py         # apply_moves — atomic os.rename on the dest tree
   rsync_runner.py   # build_rsync_command, run_dry_run, run_real_sync
   options.py        # Options dataclass, resolve_endpoints
   backup.py         # the orchestrator: snapshot → diff → replay → rsync → persist
   cli.py            # argparse CLI
+  __main__.py       # `python -m irsync` entry point
 tests/              # pytest unit + end-to-end tests
 ```
 
