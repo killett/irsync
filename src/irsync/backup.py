@@ -61,6 +61,17 @@ def _source_lock(src_root: Path) -> Iterator[None]:
         f.close()
 
 
+def _log_lock_conflict(root: Path) -> int:
+    """Log the "lock already held" refusal for ``root`` and return the exit code."""
+    logging.error(
+        "Another irsync run is already in progress against %s "
+        "(lock %s is held). Refusing to race.",
+        root,
+        root / LOCKFILE_NAME,
+    )
+    return 75  # EX_TEMPFAIL — try again later
+
+
 def _atomic_write_snapshot(rows: list[Row], source_root: Path, target: Path) -> None:
     """Write rows + provenance header to ``target`` atomically (tempfile + replace).
 
@@ -192,13 +203,7 @@ def run_backup(
                 endpoints=endpoints, options=options, args=args
             )
     except BlockingIOError:
-        logging.error(
-            "Another irsync run is already in progress against %s "
-            "(lock %s is held). Refusing to race.",
-            src_root,
-            src_root / LOCKFILE_NAME,
-        )
-        return 75  # EX_TEMPFAIL — try again later
+        return _log_lock_conflict(src_root)
 
 
 def _run_snapshot_only(*, source_arg: str, options: Options) -> int:
@@ -227,13 +232,7 @@ def _run_snapshot_only(*, source_arg: str, options: Options) -> int:
             rows = snapshot_tree(src)
             _atomic_write_snapshot(rows, src, src / SNAPSHOT_FILENAME)
     except BlockingIOError:
-        logging.error(
-            "Another irsync run is already in progress against %s "
-            "(lock %s is held). Refusing to race.",
-            src,
-            src / LOCKFILE_NAME,
-        )
-        return 75  # EX_TEMPFAIL — try again later
+        return _log_lock_conflict(src)
 
     logging.info(
         "Snapshot-only: wrote %d rows to %s", len(rows), src / SNAPSHOT_FILENAME
