@@ -8,7 +8,14 @@ import subprocess
 
 import pytest
 
-from irsync.backup import EXIT_REFUSED, _format_preview, run_all_backups, run_backup
+from irsync.backup import (
+    EXIT_REFUSED,
+    _format_first_run_preview,
+    _format_preview,
+    _format_size,
+    run_all_backups,
+    run_backup,
+)
 from irsync.diff import Changes
 from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME, snapshot_tree
 
@@ -1377,6 +1384,29 @@ class TestRunAllBackupsUnsafeDestination:
         assert rc == 1, "an unreadable destination must not keep the exit code at 0"
 
 
+class TestFormatSize:
+    @pytest.mark.parametrize(
+        ("total_bytes", "expected"),
+        [
+            (0, "0 B"),
+            (1023, "1023 B"),
+            (1024, "1.0 KiB"),
+            (1024 * 1024 - 1, "1.0 MiB"),
+            (1024**3, "1.0 GiB"),
+            (1024**4, "1.0 TiB"),
+        ],
+    )
+    def test_exact_output_at_unit_boundaries(self, total_bytes, expected):
+        # Pin the arithmetic, not just "contains GiB": a substring assertion
+        # would pass even if the wrong number were rendered. 1024*1024 - 1
+        # is the interesting boundary — the raw KiB value (1023.999...) is
+        # < 1024 but rounds to "1024.0" at one decimal place, which reads
+        # like a unit that should have rolled over. _format_size rounds
+        # before comparing so it reports "1.0 MiB" instead of the
+        # misleading "1024.0 KiB".
+        assert _format_size(total_bytes) == expected
+
+
 class TestFirstRunPreview:
     def test_first_backup_prints_a_summary_before_confirming(
         self, src_dest, basic_options, capsys
@@ -1426,3 +1456,69 @@ class TestFirstRunPreview:
         assert "FIRST BACKUP" not in out, (
             "interactive mode must not also print the summary to stdout"
         )
+
+    def test_summary_also_shown_when_snapshot_provenance_mismatched(
+        self, tmp_path, make_tree, basic_options, capsys
+    ):
+        # The first-run summary has two triggers: no snapshot at all (tested
+        # above), and a snapshot that exists but is rejected because its
+        # recorded source_root doesn't match (see
+        # TestProvenanceMismatchRejected). Both fall through to the same
+        # "changes is None" branch, so both must render the summary — not
+        # just the no-snapshot case.
+        src_a = tmp_path / "src_a"
+        dest_a = tmp_path / "dest_a"
+        make_tree(src_a, num_files=4, depth=1, seed=1)
+        dest_a.mkdir()
+        rc = run_backup(
+            source_arg=str(src_a),
+            destination_arg=str(dest_a),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+
+        # Stage a fresh, unrelated source tree and plant src_a's snapshot
+        # there, as if the user copied it over by mistake.
+        src_b = tmp_path / "src_b"
+        dest_b = tmp_path / "dest_b"
+        make_tree(src_b, num_files=4, depth=1, seed=2)
+        dest_b.mkdir()
+        shutil.copy2(src_a / SNAPSHOT_FILENAME, src_b / SNAPSHOT_FILENAME)
+        capsys.readouterr()  # discard the first run's output
+
+        rc = run_backup(
+            source_arg=str(src_b),
+            destination_arg=str(dest_b),
+            options=basic_options,
+            args=_args(),
+        )
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "FIRST BACKUP" in out
+        assert str(src_b) in out
+        assert str(dest_b) in out
+        assert "DELETE" in out
+
+    def test_remote_destination_reports_unchecked_not_a_fabricated_zero(self, tmp_path):
+        # A remote destination is never scanned by foreign_dest_entries (Task
+        # 3 only counts a local dest), so foreign_count is always 0 for a
+        # remote dest -- not because it's empty, but because it was never
+        # checked. The summary must say so instead of asserting "0 existing
+        # entries" as if that were a verified fact.
+        rows: list = [
+            {
+                "dev": 1,
+                "ino": 1,
+                "type": "f",
+                "nlink": 1,
+                "size": 10,
+                "mtime_ns": 0,
+                "btime_ns": -1,
+                "path": "a.txt",
+            }
+        ]
+        text = _format_first_run_preview(rows, tmp_path / "src", None, 0)
+        assert "not checked" in text
+        assert "0 existing entries" not in text

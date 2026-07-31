@@ -166,10 +166,16 @@ def _format_size(total_bytes: int) -> str:
     (falling back to bytes) keeps the summary meaningful across both a
     handful of config files and a multi-terabyte archive, with no added
     dependency.
+
+    The threshold check compares ``round(value, 1)`` rather than the raw
+    value: a raw value of e.g. 1023.999... KiB is < 1024 and would render
+    as "1024.0 KiB" once formatted to one decimal place, which reads like
+    it should have rolled over to the next unit. Rounding before comparing
+    makes the displayed number and the unit choice agree at every boundary.
     """
     value = float(total_bytes)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if value < 1024 or unit == "TiB":
+        if round(value, 1) < 1024 or unit == "TiB":
             if unit == "B":
                 return f"{int(value)} {unit}"
             return f"{value:.1f} {unit}"
@@ -192,11 +198,20 @@ def _format_first_run_preview(
     """
     total_bytes = sum(r["size"] for r in rows if r["type"] == "f")
     size_str = _format_size(total_bytes)
-    dest_desc = "n/a (remote)" if dest_root is None else str(dest_root)
+    # A remote destination is never scanned for foreign_dest_entries (Task 3
+    # only counts a local dest's existing entries), so foreign_count is
+    # always 0 here — not because the destination is empty, but because it
+    # was never checked. Say so instead of presenting an unchecked 0 as fact.
+    if dest_root is None:
+        dest_desc = "n/a (remote)"
+        existing_desc = "not checked (remote)"
+    else:
+        dest_desc = str(dest_root)
+        existing_desc = f"{foreign_count} existing entries"
     lines = [
         "=== FIRST BACKUP — no prior snapshot ===",
         f"Source:      {src_root}   {len(rows):,} entries, {size_str}",
-        f"Destination: {dest_desc}   {foreign_count} existing entries",
+        f"Destination: {dest_desc}   {existing_desc}",
         "rsync will transfer the source in full and DELETE anything at the",
         "destination that is not on the source.",
     ]
