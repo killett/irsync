@@ -59,6 +59,23 @@ def _build_parser(
         help="Do not apply the default exclude list.",
     )
     parser.add_argument(
+        "--allow-unmounted",
+        action="store_true",
+        help=(
+            "Proceed even when a drive under the media base directory is not "
+            "mounted. Without this, irsync refuses, because an unmounted drive "
+            "looks like an empty tree and would wipe its own backup."
+        ),
+    )
+    parser.add_argument(
+        "--require-mount",
+        action="store_true",
+        help=(
+            "Apply the mountpoint check to endpoints outside the media base "
+            "directory too."
+        ),
+    )
+    parser.add_argument(
         "-y", "--yes", action="store_true", help="Skip the confirmation prompt."
     )
     parser.add_argument(

@@ -62,6 +62,10 @@ def _args(**overrides):
         snapshot_only=False,
         dry_run=False,
         debug=False,
+        allow_unmounted=False,
+        require_mount=False,
+        allow_nonempty_dest=False,
+        allow_massive_delete=False,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -1164,3 +1168,72 @@ class TestSnapshotOnly:
         assert (src / SNAPSHOT_FILENAME).exists()
         assert not (dest / SNAPSHOT_FILENAME).exists()
         assert calls == []
+
+
+class TestMountGate:
+    def test_unmounted_source_refuses_and_writes_no_lockfile(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # The gate must run before _source_lock: that function does
+        # mkdir(exist_ok=True) and opens .irsync.lock for writing, which
+        # would create files on the very disk the gate exists to protect.
+        # run_backup RAISES here rather than returning a code: run_all_backups
+        # needs the exception to tell "unmounted" apart from a real failure.
+        # Task 5 adds the cli.main boundary that turns it into exit code 2 for
+        # single-drive runs, and tests that separately.
+        from irsync.preflight import EndpointNotMounted
+
+        src, dest = src_dest
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+        basic_options.base_dir = src.parent
+
+        with pytest.raises(EndpointNotMounted):
+            run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert not (src / LOCKFILE_NAME).exists(), (
+            "the gate must run before the lock is taken"
+        )
+
+    def test_allow_unmounted_bypasses_the_gate(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        src, dest = src_dest
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+        basic_options.base_dir = src.parent
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(allow_unmounted=True),
+        )
+        assert rc == 0
+
+
+class TestRunAllBackupsMountSkips:
+    def test_unmounted_drive_counts_as_missing_not_error(
+        self, basic_options, monkeypatch
+    ):
+        # Contract from commit 044c036: a drive that isn't there is a skip.
+        # An unmounted drive is the same situation, so it must not flip the
+        # exit code of an ALL run.
+        from irsync.preflight import EndpointNotMounted
+
+        def fake_backup(*, source_arg, destination_arg, options, args):
+            if source_arg == "H":
+                raise EndpointNotMounted("H is not a mountpoint")
+            return 0
+
+        monkeypatch.setattr("irsync.backup.run_backup", fake_backup)
+        basic_options.all_backups = ["G", "H", "~"]
+
+        rc = run_all_backups(options=basic_options, args=_args())
+        assert rc == 0

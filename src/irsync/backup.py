@@ -16,6 +16,7 @@ from pathlib import Path
 from irsync.diff import Changes, compute_changes
 from irsync.options import Endpoints, Options, resolve_endpoints
 from irsync.paths import with_trailing_slash
+from irsync.preflight import EndpointNotMounted, check_mounted
 from irsync.replay import CrossDeviceMoveError, apply_moves
 from irsync.rsync_runner import build_rsync_command, run_dry_run, run_real_sync
 from irsync.snapshot import (
@@ -220,9 +221,25 @@ def run_backup(
     # resolve_endpoints so the user can snapshot any local directory without
     # having to invent a dest argument.
     if args.snapshot_only and not destination_arg:
-        return _run_snapshot_only(source_arg=source_arg, options=options)
+        return _run_snapshot_only(source_arg=source_arg, options=options, args=args)
 
     endpoints = resolve_endpoints(source_arg, destination_arg, options)
+
+    # The gate runs BEFORE _source_lock: that function mkdirs the source root
+    # and opens .irsync.lock for writing, so locking an unmounted source
+    # creates files on the disk the gate exists to protect.
+    try:
+        check_mounted(
+            endpoints.source, options.base_dir, gate_outside_base=args.require_mount
+        )
+        check_mounted(
+            endpoints.dest, options.base_dir, gate_outside_base=args.require_mount
+        )
+    except EndpointNotMounted:
+        if not args.allow_unmounted:
+            raise
+        logging.warning("Proceeding past the mount check (--allow-unmounted).")
+
     src_root = endpoints.source if isinstance(endpoints.source, Path) else None
     if src_root is None:
         # Remote source: nowhere to put the lock. Skip the lock and let
@@ -239,7 +256,9 @@ def run_backup(
         return _log_lock_conflict(src_root)
 
 
-def _run_snapshot_only(*, source_arg: str, options: Options) -> int:
+def _run_snapshot_only(
+    *, source_arg: str, options: Options, args: argparse.Namespace
+) -> int:
     """Take a snapshot of ``source_arg`` and write it next to the source. No dest."""
     from irsync.paths import ensure_local_dir
 
@@ -255,6 +274,13 @@ def _run_snapshot_only(*, source_arg: str, options: Options) -> int:
         src = ensure_local_dir(options.python_dir)
     else:
         src = ensure_local_dir(arg)
+
+    try:
+        check_mounted(src, options.base_dir)
+    except EndpointNotMounted:
+        if not args.allow_unmounted:
+            raise
+        logging.warning("Proceeding past the mount check (--allow-unmounted).")
 
     # Acquire the same lock as a regular backup. Without it, a concurrent
     # `_run_backup_for_endpoints` could call `_cleanup_orphan_tempfiles` and
@@ -584,8 +610,8 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
                 options=options,
                 args=args,
             )
-        except (FileNotFoundError, NotADirectoryError) as e:
-            logging.error("Skipping %r (missing drive/path): %s", backup, e)
+        except (FileNotFoundError, NotADirectoryError, EndpointNotMounted) as e:
+            logging.error("Skipping %r (missing/unmounted drive): %s", backup, e)
             missing.append(backup)
             continue
         if rc == 0:
