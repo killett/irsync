@@ -605,8 +605,11 @@ class TestCatastrophicDiffSanityCheck:
         ]
         assert dest_files, "dest should not have been wiped"
 
-    def test_majority_deletion_proceeds_with_force(self, src_dest, basic_options):
-        # With --force, the user is explicitly overriding the safety check.
+    def test_majority_deletion_proceeds_with_allow_massive_delete(
+        self, src_dest, basic_options
+    ):
+        # With --allow-massive-delete, the user is explicitly overriding the
+        # safety check.
         src, dest = src_dest
         run_backup(
             source_arg=str(src),
@@ -624,9 +627,42 @@ class TestCatastrophicDiffSanityCheck:
             source_arg=str(src),
             destination_arg=str(dest),
             options=basic_options,
-            args=_args(force=True),
+            args=_args(allow_massive_delete=True),
         )
         assert rc == 0
+
+    def test_force_alone_no_longer_bypasses_the_guard(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # G: --force used to disarm this guard as an undocumented side
+        # effect, so a cron line carrying --force for the no-change
+        # short-circuit silently lost the protection.
+        src, dest = src_dest
+        run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        for child in src.iterdir():
+            if child.name != SNAPSHOT_FILENAME:
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: calls.append(cmd) or 0
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(force=True),
+        )
+        assert rc == EXIT_REFUSED
+        assert calls == [], "rsync must not run when the guard fires"
 
 
 class TestSnapshotOnlyHonorsLock:

@@ -534,15 +534,16 @@ def _run_backup_for_endpoints(
             return 0
         # Sanity check: a diff that says >50% of the previous tree is gone
         # is almost certainly a wrong-source / stale-snapshot / swapped-args
-        # accident. Refuse unless the user explicitly opts in with --force.
-        if before_rows and not args.force:
+        # accident. Refuse unless the user explicitly opts in with
+        # --allow-massive-delete.
+        if before_rows and not args.allow_massive_delete:
             ratio = len(changes.deleted) / len(before_rows)
             if ratio > CATASTROPHIC_DELETE_RATIO:
                 logging.error(
                     "Refusing: diff would delete %d of %d previously-recorded "
                     "entries (%.0f%%). This usually means the source tree has "
                     "been swapped, the snapshot is from a different tree, or "
-                    "args were reversed. Pass --force to override.",
+                    "args were reversed. Pass --allow-massive-delete to override.",
                     len(changes.deleted),
                     len(before_rows),
                     ratio * 100,

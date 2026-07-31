@@ -93,6 +93,14 @@ def _build_parser(
         help="Run rsync even when the source snapshot shows no changes.",
     )
     parser.add_argument(
+        "--allow-massive-delete",
+        action="store_true",
+        help=(
+            "Bypass the refusal when the diff would delete more than half of "
+            "the previously-recorded entries."
+        ),
+    )
+    parser.add_argument(
         "--no-snapshot",
         action="store_true",
         help="Skip the snapshot/diff/replay layer and run rsync directly against the source and destination.",
@@ -145,6 +153,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             "--force has no effect with --no-snapshot (the snapshot diff is "
             "what --force overrides). Drop one of --force or --no-snapshot."
+        )
+    if args.allow_massive_delete and args.no_snapshot:
+        parser.error(
+            "--allow-massive-delete has no effect with --no-snapshot (the "
+            "snapshot diff is what it overrides). Drop one of them."
         )
 
     logging.basicConfig(

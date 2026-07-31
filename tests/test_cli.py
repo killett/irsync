@@ -76,6 +76,42 @@ def test_5th_m2_force_with_no_snapshot_rejected_at_parse_time(tmp_path):
     )
 
 
+def test_allow_massive_delete_with_no_snapshot_rejected(tmp_path):
+    # NEW-M2 (5th-pass): --allow-massive-delete only does anything inside the
+    # snapshot diff branch (the 50% deletion threshold). With --no-snapshot,
+    # that check is bypassed and --allow-massive-delete is silently inert — a
+    # usability footgun. Reject the combination at parse time so the user
+    # gets an immediate, clear error rather than running with one of their
+    # flags ignored.
+    src = tmp_path / "src"
+    src.mkdir()
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "irsync",
+            str(src),
+            str(dest),
+            "--no-snapshot",
+            "--allow-massive-delete",
+            "--yes",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=ENV,
+    )
+    assert result.returncode != 0, (
+        "--allow-massive-delete with --no-snapshot must be rejected at parse time"
+    )
+    combined = (result.stdout + result.stderr).lower()
+    assert "--allow-massive-delete" in combined and "--no-snapshot" in combined, (
+        f"error message should mention both flags; got: {combined!r}"
+    )
+
+
 def test_missing_source_path_exits_cleanly(tmp_path):
     # Reproduced against the old code: FileNotFoundError escaped cli.main as
     # a traceback and the exit code was flattened to 1.
