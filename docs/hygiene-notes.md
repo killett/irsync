@@ -108,3 +108,68 @@ session and landed with red/green tests.
 - The working tree carried uncommitted `pixi.toml` / `pixi.lock` changes adding
   ~18 dependencies unrelated to irsync (`typer`, `pydantic`, `httpx`,
   `openjdk`, `ipython`, …). Left untouched.
+
+## 2026-07-31 — mount-safety pass (hazards A–G closed)
+
+Baseline before this pass: `ruff check .` clean, `ruff format --check .`
+clean, `mypy .` clean, `226 passed, 1 skipped`. Same after — this pass is
+docs-only (README.md, this file, and the architecture doc).
+
+Design doc: `docs/superpowers/specs/2026-07-31-mount-safety-design.md`
+(hazards A–G defined there). Plan: `docs/superpowers/plans/2026-07-31-mount-safety.md`.
+
+### Hazards closed
+
+- **A — unmounted source wipes the backup.** Closed redundantly by two
+  independent guards, per the design's "cover the worst outcome twice"
+  principle: the mount gate (`d124396`, refined by `df1a850` and `d506890`)
+  and the destination gate (`a2c43a4`, clarified by `610f06b`).
+- **B — unmounted destination fills the root filesystem.** Closed by the same
+  mount gate (`d124396`) — it checks both endpoints, not just the source.
+- **C — `ALL` multiplies A.** Closed by the mount gate treating
+  `EndpointNotMounted` as a per-drive skip inside `run_all_backups`
+  (`d124396`), plus the destination gate (`a2c43a4`) catching the case where
+  the mountpoint directory itself resolves. `610f06b` fixed a related bug
+  where `UnsafeDestination` was aborting the whole `ALL` batch instead of
+  being counted as an error and continuing.
+- **D — the first run confirms blind.** Closed by the first-run summary
+  (`b7d3bcd`, gaps closed by `4a41bc1`): scale (entry count, byte size) and the
+  destination's existing-entry count (or "not checked (remote)") are shown
+  before the confirmation prompt, for both no-baseline situations (no snapshot
+  at all, and a snapshot rejected by the provenance check).
+- **E — recoverable conditions exit via traceback.** Closed by `364e176`
+  (missing rsync binary, read-only source root, missing source path, and the
+  `ValueError` family from `resolve_endpoints` all become a logged refusal at
+  exit 2, no traceback) and `a0b652c` (the rsync-availability check no longer
+  applies to `--snapshot-only`, which never invokes rsync).
+- **F — nested mounts are skipped silently.** Closed by `4753a32`: one
+  aggregated warning per walk, naming the count and first five skipped paths.
+- **G — `--force` conflates two meanings.** Closed by `0230ded` (split into
+  `--force` for the no-change short-circuit and `--allow-massive-delete` for
+  the deletion-ratio guard), with a documentation follow-up in `ea3738e` for
+  stale `--force` references the split left behind.
+
+### Coverage gaps — stated honestly, not fixed
+
+- **Hazard F has no end-to-end test.** Creating a real nested mount requires
+  root, which neither the test suite nor CI has. The boundary decision is
+  unit-tested via the extracted pure helper `_crosses_boundary` in
+  `test_snapshot.py`; the integration — an actual mount inside a snapshot
+  walk producing the aggregated warning — is not exercised anywhere.
+- **The `(and N more)` truncation branch of the nested-mount warning** (more
+  than 5 skipped paths) is untested, as is `include_other=True` combined with
+  a crossed filesystem boundary. Both are plausible in production and neither
+  has a regression test.
+- **The destination gate fires before the `--dry-run` branch.** In
+  `_run_backup_for_endpoints`, the baseline-less destination check runs before
+  the `args.dry_run` branch is reached, so a read-only dry run against a
+  non-empty first-run destination also refuses rather than merely previewing.
+  Contestable — a dry run arguably shouldn't be blocked by a guard whose whole
+  point is preventing writes — but recorded here rather than changed, since
+  changing it was out of this pass's scope.
+- **The `PermissionError` log-and-return block is duplicated verbatim**
+  between `run_backup` and `_run_snapshot_only` in `src/irsync/backup.py`
+  (each catches a read-only source root around its own `_source_lock` call
+  and logs/returns identically). Could be factored into a helper alongside
+  the existing `_log_lock_conflict`. Not done in this pass — behavior is
+  correct, just duplicated.

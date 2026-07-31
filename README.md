@@ -47,6 +47,47 @@ irsync /mnt/data /mnt/data_backup --no-snapshot
 Drive-letter shorthand (`G`), `~` for home, `mypython` for the Python source
 directory, and `ALL` for every configured drive are also supported.
 
+## Safety
+
+irsync fails closed: when it cannot establish that an endpoint is the drive
+you meant, it refuses with exit code 2 instead of proceeding. The motivating
+case is a removable drive that isn't mounted — its mountpoint directory still
+exists and is empty, which every other check reads as a legitimate empty
+tree. Left unchecked, an empty *source* lets `rsync --delete-before` erase
+the destination, and irsync would exit 0 and call it a successful backup.
+
+- **The drive is not mounted.** Any endpoint that resolves under the media
+  base directory (e.g. `/media/<user>/G`) must sit on a mounted filesystem;
+  the base directory itself is exempt, since it is the ordinary directory
+  that *contains* mountpoints, not a mountpoint itself. `--require-mount`
+  extends this check to endpoints outside the base directory too (the base
+  directory stays exempt either way). `--allow-unmounted` proceeds anyway.
+- **A first backup would destroy data.** When there is no usable snapshot
+  baseline — none exists yet, or an existing one is rejected because it
+  belongs to a different source tree — a *local* destination that already
+  holds files other than irsync's own snapshot/lock is refused, because
+  `rsync --delete-before` would remove them. A remote destination is never
+  scanned, so this guard only applies locally. `--allow-nonempty-dest`
+  adopts the destination anyway.
+- **A run would delete more than half of what's recorded.** Independent of
+  the above, if the diff says more than 50% of the previously-recorded
+  entries are gone, the run refuses — usually a swapped-source or
+  stale-snapshot accident. `--allow-massive-delete` overrides it. `--force`
+  does *not* — it only means "run rsync even though the snapshot diff found
+  no changes."
+
+| Flag | Effect |
+|---|---|
+| `--allow-unmounted` | proceed even if the drive is not mounted |
+| `--allow-nonempty-dest` | adopt a destination that already holds files, on a baseline-less run |
+| `--allow-massive-delete` | proceed when the diff would delete more than half of the recorded entries |
+| `--require-mount` | also apply the mount check to endpoints outside the media base directory |
+| `--force` | run rsync even when the snapshot diff found no changes (nothing else) |
+
+Each flag disarms exactly one guard, so a cron line cannot silently lose a
+protection it did not name. If a refusal fires on a drive you expect to be
+attached, check that it is actually mounted before reaching for a flag.
+
 An `ALL` run treats a drive that isn't mounted as a **skip, not an error**: the
 configured list names every drive you might ever attach, so missing ones are
 expected. Such a run still exits 0, naming both the skipped and the

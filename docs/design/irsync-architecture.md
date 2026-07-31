@@ -373,6 +373,58 @@ matter — snapshot rows aren't sorted at write time and `compute_moves` keys by
 inode, not row position. Verified with a depth-1500 test (under PATH_MAX with
 single-char dir names) and 10/10 deterministic integration runs.
 
+### 24. Mount gate: base_dir is exempt, and the gate runs before any write
+
+`check_mounted` (`src/irsync/preflight.py`) doesn't test the endpoint itself —
+it tests the first path component below `base_dir` (`mount_gate_root`), because
+the drive-letter shorthand destinations (`mypython`, `~`) are subdirectories of
+a mounted drive rather than mountpoints themselves. `base_dir` (e.g.
+`/media/<user>`) is always exempt, even under `--require-mount`: it is by
+definition the ordinary directory that *contains* mountpoints, never one
+itself. The gate runs in `run_backup` **before** `_source_lock`, which
+`mkdir`s the source root and opens `.irsync.lock` for writing — gating after
+the lock would let an unmounted source get files created on it by the very
+check meant to protect it. `--snapshot-only` runs the same gate on its
+(source-only) endpoint; an earlier version of this task omitted that and was
+corrected. Remote endpoints (strings, not `Path`) are always exempt — there is
+no local mount to check.
+
+### 25. Destination gate is baseline-driven, not mount-driven, and remote-aware
+
+`_run_backup_for_endpoints` calls `foreign_dest_entries` only when there is no
+usable baseline (no snapshot, or one rejected by the provenance check), and
+only for a **local** destination — a remote one is never scanned. The
+first-run summary (`_format_first_run_preview`) reports a remote destination's
+existing-entries line as "not checked (remote)", not "0 existing entries": it
+was never scanned, and presenting an unchecked 0 as fact would be worse than
+saying so. `run_all_backups` treats `EndpointNotMounted` as a skip (exit 0
+still possible) but `UnsafeDestination` (destination exists but can't be read)
+as a real error: counted, batch continues to the remaining drives, run exits 1.
+These are deliberately different outcomes for deliberately different failure
+shapes.
+
+### 26. `--force` overrides one guard; `--allow-massive-delete` overrides the other
+
+`--force` means only "run rsync despite the snapshot diff finding no changes."
+Bypassing the >50% deletion guard (AD-6) requires the separate
+`--allow-massive-delete`. One override per guard, so a cron line that adds
+`--force` for routine reason 1 cannot silently disarm the catastrophic-delete
+protection too. Both flags are rejected at parse time when combined with
+`--no-snapshot`, since neither has an effect there (there is no snapshot diff
+to override).
+
+### 27. Nested-mount warning is aggregated, not per-path, and walk-only
+
+`snapshot_tree` logs one `logging.warning` per walk when `xdev=True` causes it
+to skip a directory on another filesystem, naming the count and the first five
+skipped paths (`(and N more)` beyond that) rather than staying silent or
+logging per-path noise. The boundary decision itself is extracted into the
+pure `_crosses_boundary(entry_dev, root_dev, xdev)` helper specifically so it
+is unit-testable without root: creating a real nested mount to exercise the
+warning end to end requires privileges neither the suite nor CI has. The
+warning never fires for `--no-snapshot` runs, which skip the snapshot/diff
+layer entirely and never call `snapshot_tree`.
+
 ## Appendix A — bug catalog
 
 28 bugs fixed across 10 review passes (passes 1-8 plus pass 10; pass 9 was
