@@ -47,6 +47,12 @@ irsync /mnt/data /mnt/data_backup --no-snapshot
 Drive-letter shorthand (`G`), `~` for home, `mypython` for the Python source
 directory, and `ALL` for every configured drive are also supported.
 
+An `ALL` run treats a drive that isn't mounted as a **skip, not an error**: the
+configured list names every drive you might ever attach, so missing ones are
+expected. Such a run still exits 0, naming both the skipped and the
+successfully backed-up drives in its summary. A non-zero exit from `ALL` means
+a backup actually failed (1) or you aborted at the prompt (130).
+
 ## Project structure
 
 ```

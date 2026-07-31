@@ -1,13 +1,14 @@
 """End-to-end orchestration tests for irsync.run_backup."""
 
 import argparse
+import logging
 import os
 import shutil
 import subprocess
 
 import pytest
 
-from irsync.backup import EXIT_REFUSED, _format_preview, run_backup
+from irsync.backup import EXIT_REFUSED, _format_preview, run_all_backups, run_backup
 from irsync.diff import Changes
 from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME, snapshot_tree
 
@@ -1043,6 +1044,77 @@ class TestDryRunFailureHandled:
         )
         assert rc == EXIT_REFUSED
         assert rc > 0
+
+
+class TestRunAllBackups:
+    """`irsync ALL` treats an unmounted drive as a skip, not a failure."""
+
+    @staticmethod
+    def _options_with(basic_options, entries):
+        basic_options.all_backups = entries
+        return basic_options
+
+    def test_missing_drive_is_skipped_without_failing_the_run(
+        self, basic_options, monkeypatch, caplog
+    ):
+        # Most of the 16 configured entries are external drives that are not
+        # mounted on any given day, so "drive absent" is the normal case for
+        # an ALL run. Exiting non-zero here would make every nightly ALL run
+        # look like a failure.
+        def fake_backup(*, source_arg, destination_arg, options, args):
+            if source_arg == "H":
+                raise FileNotFoundError(f"Path '{source_arg}' does not exist.")
+            return 0
+
+        monkeypatch.setattr("irsync.backup.run_backup", fake_backup)
+
+        with caplog.at_level(logging.WARNING):
+            rc = run_all_backups(
+                options=self._options_with(basic_options, ["G", "H", "~"]),
+                args=_args(),
+            )
+
+        assert rc == 0
+        assert "H" in caplog.text
+
+    def test_summary_names_the_drives_that_were_backed_up(
+        self, basic_options, monkeypatch, caplog
+    ):
+        # The run collected a `successful` list but never reported it, so an
+        # ALL run that skipped a drive left no record of which drives DID get
+        # backed up — exactly the audit trail a cron log needs.
+        def fake_backup(*, source_arg, destination_arg, options, args):
+            if source_arg == "H":
+                raise FileNotFoundError(f"Path '{source_arg}' does not exist.")
+            return 0
+
+        monkeypatch.setattr("irsync.backup.run_backup", fake_backup)
+
+        with caplog.at_level(logging.INFO):
+            run_all_backups(
+                options=self._options_with(basic_options, ["G", "H", "~"]),
+                args=_args(),
+            )
+
+        assert "G" in caplog.text and "~" in caplog.text
+        summary = [r for r in caplog.records if "backed up" in r.getMessage()]
+        assert summary, "the summary must report which drives were backed up"
+        assert "G" in summary[0].getMessage()
+        assert "~" in summary[0].getMessage()
+
+    def test_a_real_backup_error_still_fails_the_run(self, basic_options, monkeypatch):
+        # The skip-is-not-an-error rule must not swallow genuine failures:
+        # a non-zero return from run_backup is a real error and must surface.
+        def fake_backup(*, source_arg, destination_arg, options, args):
+            return EXIT_REFUSED if source_arg == "G" else 0
+
+        monkeypatch.setattr("irsync.backup.run_backup", fake_backup)
+
+        rc = run_all_backups(
+            options=self._options_with(basic_options, ["G", "~"]),
+            args=_args(),
+        )
+        assert rc == 1
 
 
 class TestSnapshotOnly:

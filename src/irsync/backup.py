@@ -555,7 +555,23 @@ def _page_output(text: str) -> None:
 
 
 def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
-    """Iterate :data:`Options.all_backups` and back up each in turn."""
+    """Iterate :data:`Options.all_backups` and back up each in turn.
+
+    Exit-code contract: **a drive that isn't mounted is a skip, not an
+    error.** :data:`Options.all_backups` lists every drive the user might
+    ever attach, and on any given day most of them are absent, so an ALL run
+    that skips them still reports success. Only a real backup failure (a
+    non-zero return from :func:`run_backup`) makes this return 1; a user
+    abort propagates :data:`EXIT_ABORTED` and stops the remaining drives.
+
+    Both the skipped and the successfully-backed-up entries are named in the
+    summary log line so a cron log records what actually happened.
+
+    Returns:
+        0 when every attempted backup succeeded (whether or not drives were
+        skipped), 1 when at least one drive failed, or :data:`EXIT_ABORTED`
+        when the user aborted.
+    """
     logging.info("Backing up all drives: %s", ", ".join(options.all_backups))
     total_errors = 0
     successful: list[str] = []
@@ -583,12 +599,16 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
                 logging.error("Max errors (%d) reached; stopping.", options.max_errors)
                 return 1
     if total_errors == 0 and not missing:
-        logging.info("All backups completed successfully.")
+        logging.info(
+            "All backups completed successfully: %s.", ", ".join(successful) or "none"
+        )
         return 0
     logging.warning(
-        "Finished with issues. errors=%d, missing/skipped=%d (%s).",
+        "Finished with issues. backed up=%d (%s), errors=%d, missing/skipped=%d (%s).",
+        len(successful),
+        ", ".join(successful) or "none",
         total_errors,
         len(missing),
-        ", ".join(missing),
+        ", ".join(missing) or "none",
     )
     return 1 if total_errors else 0
