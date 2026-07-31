@@ -67,7 +67,9 @@ def check_mounted(
             Remotes are always exempt — there is no local mount to check.
         base_dir: The drive-letter base directory.
         gate_outside_base: When True, endpoints outside ``base_dir`` must
-            themselves be mountpoints (the ``--require-mount`` opt-in).
+            themselves be mountpoints (the ``--require-mount`` opt-in). However,
+            ``base_dir`` itself is always exempt — it is by definition the
+            ordinary directory that contains mountpoints, never a mountpoint.
 
     Raises:
         EndpointNotMounted: If the gate path is not a mountpoint.
@@ -77,6 +79,8 @@ def check_mounted(
     gate = mount_gate_root(endpoint, base_dir)
     if gate is None:
         if not gate_outside_base:
+            return
+        if endpoint == base_dir:
             return
         gate = endpoint
     if not os.path.ismount(gate):

@@ -67,3 +67,14 @@ class TestCheckMounted:
                 tmp_path / "media" / "u",
                 gate_outside_base=True,
             )
+
+    def test_base_dir_is_exempt_even_when_gate_outside_base(
+        self, tmp_path, monkeypatch
+    ):
+        # base_dir itself is the ordinary directory containing mountpoints,
+        # never a mountpoint, so it must be exempt even with gate_outside_base=True.
+        base = tmp_path / "media" / "u"
+        base.mkdir(parents=True)
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+
+        check_mounted(base, base, gate_outside_base=True)
