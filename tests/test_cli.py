@@ -144,3 +144,40 @@ def test_missing_rsync_binary_exits_cleanly(tmp_path):
     assert result.returncode == 2
     assert "Traceback" not in result.stderr
     assert "rsync" in (result.stdout + result.stderr).lower()
+
+
+def test_identical_source_and_destination_exits_cleanly(tmp_path):
+    # Reviewer Finding 1: options.resolve_endpoints raises ValueError for six
+    # user-facing invocation errors (missing source/dest, remote-to-remote,
+    # identical paths, source-inside-dest, dest-inside-source). This is
+    # cli.main's ValueError catch, exercised end-to-end: source == dest is
+    # the cleanest of the six to set up as a real CLI invocation.
+    same = tmp_path / "same"
+    same.mkdir()
+    result = subprocess.run(
+        [sys.executable, "-m", "irsync", str(same), str(same), "--yes"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=ENV,
+    )
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+
+
+def test_missing_destination_for_plain_path_source_exits_cleanly(tmp_path):
+    # Second of the six ValueError refusals: an ordinary path (not a drive
+    # letter, '~', or 'mypython') requires an explicit destination.
+    # resolve_endpoints raises ValueError; cli.main's boundary must turn
+    # that into a clean exit 2 rather than a traceback.
+    src = tmp_path / "src"
+    src.mkdir()
+    result = subprocess.run(
+        [sys.executable, "-m", "irsync", str(src), "--yes"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=ENV,
+    )
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr

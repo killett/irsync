@@ -1574,3 +1574,49 @@ class TestCleanRefusals:
         finally:
             src.chmod(0o755)
         assert rc == EXIT_REFUSED
+
+    def test_snapshot_only_succeeds_without_rsync_no_destination(
+        self, tmp_path, make_tree, basic_options, monkeypatch
+    ):
+        # Regression: check_rsync_available() used to run unconditionally as
+        # the first statement of run_backup, making rsync a hard dependency
+        # of --snapshot-only even though that mode never invokes rsync at
+        # all (it only walks the source and writes a snapshot file). This is
+        # the no-destination route (routed to _run_snapshot_only directly).
+        src = tmp_path / "src_only"
+        make_tree(src, num_files=4, depth=1)
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=None,
+            options=basic_options,
+            args=_args(snapshot_only=True),
+        )
+        assert rc == 0
+        assert (src / SNAPSHOT_FILENAME).exists()
+
+    def test_snapshot_only_succeeds_without_rsync_with_destination(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # Same regression, the with-destination route: --snapshot-only plus
+        # a destination goes through resolve_endpoints and
+        # _run_backup_for_endpoints's own args.snapshot_only branch, which
+        # also returns before ever touching rsync.
+        src, dest = src_dest
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(snapshot_only=True),
+        )
+        assert rc == 0
+        assert (src / SNAPSHOT_FILENAME).exists()

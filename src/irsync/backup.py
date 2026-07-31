@@ -292,19 +292,26 @@ def run_backup(
             destination cannot be read to check whether it is empty.
             Callers that iterate several drives (:func:`run_all_backups`)
             catch this and count it as a real error, not a skip.
-        RsyncUnavailable: If the rsync binary is not on PATH. Checked
-            up front so a missing rsync install surfaces as a clean refusal
-            rather than a ``FileNotFoundError`` traceback from deep inside
-            ``run_dry_run``/``run_real_sync``.
+        RsyncUnavailable: If the rsync binary is not on PATH and this run
+            will actually invoke rsync (``--snapshot-only`` never does, so
+            it is exempt). Checked up front so a missing rsync install
+            surfaces as a clean refusal rather than a ``FileNotFoundError``
+            traceback from deep inside ``run_dry_run``/``run_real_sync``.
     """
-    check_rsync_available()
-
     # --snapshot-only doesn't need a destination at all — it just records the
     # current state of the source for use as a future baseline. Route around
     # resolve_endpoints so the user can snapshot any local directory without
     # having to invent a dest argument.
     if args.snapshot_only and not destination_arg:
         return _run_snapshot_only(source_arg=source_arg, options=options, args=args)
+
+    # --snapshot-only never runs rsync, whether or not a destination was also
+    # given (see the early return above and the args.snapshot_only branch in
+    # _run_backup_for_endpoints), so it must not be gated on rsync's
+    # presence. Every other path below eventually calls run_dry_run or
+    # run_real_sync.
+    if not args.snapshot_only:
+        check_rsync_available()
 
     endpoints = resolve_endpoints(source_arg, destination_arg, options)
 
