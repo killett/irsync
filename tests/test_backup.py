@@ -3,10 +3,11 @@
 import argparse
 import os
 import shutil
+import subprocess
 
 import pytest
 
-from irsync.backup import _format_preview, run_backup
+from irsync.backup import EXIT_REFUSED, _format_preview, run_backup
 from irsync.diff import Changes
 from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME, snapshot_tree
 
@@ -970,6 +971,78 @@ class TestNoSnapshotYesAuditability:
             "--no-snapshot --yes must print the dry-run preview to stdout "
             "for cron auditability (AD-7)"
         )
+
+
+class TestDryRunFailureHandled:
+    """rsync failing during the preview must abort cleanly, not raise."""
+
+    @staticmethod
+    def _raise_rsync_failure(returncode):
+        def _fake_dry_run(cmd):
+            raise subprocess.CalledProcessError(returncode, cmd)
+
+        return _fake_dry_run
+
+    def test_dry_run_flag_returns_rsync_exit_code(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # rsync exits 23 (partial transfer) / 24 (vanished files) routinely on
+        # a live tree. The --dry-run path used to let CalledProcessError escape
+        # through cli.main, so the user got a traceback and exit 1 instead of
+        # rsync's actual code.
+        src, dest = src_dest
+        monkeypatch.setattr("irsync.backup.run_dry_run", self._raise_rsync_failure(23))
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(dry_run=True),
+        )
+        assert rc == 23
+
+    def test_no_snapshot_preview_failure_aborts_before_real_rsync(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # The --no-snapshot path always runs a preview first. If that preview
+        # fails (255 = ssh failure on a remote endpoint), irsync must report
+        # the code AND must not fall through to the real transfer.
+        src, dest = src_dest
+        monkeypatch.setattr("irsync.backup.run_dry_run", self._raise_rsync_failure(255))
+        real_sync_calls = []
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync",
+            lambda cmd: real_sync_calls.append(cmd) or 0,
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(no_snapshot=True),
+        )
+        assert rc == 255
+        assert real_sync_calls == [], (
+            "a failed preview must not fall through to the real rsync run"
+        )
+
+    def test_signal_killed_rsync_maps_to_a_positive_exit_code(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        # A subprocess killed by a signal reports a NEGATIVE returncode
+        # (-SIGTERM). Returning that verbatim would hand SystemExit a negative
+        # value, which the shell wraps around to a meaningless status.
+        src, dest = src_dest
+        monkeypatch.setattr("irsync.backup.run_dry_run", self._raise_rsync_failure(-15))
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(dry_run=True),
+        )
+        assert rc == EXIT_REFUSED
+        assert rc > 0
 
 
 class TestSnapshotOnly:

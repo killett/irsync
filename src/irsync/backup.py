@@ -151,6 +151,33 @@ def _format_preview(changes: Changes) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _dry_run_preview(cmd: list[str]) -> tuple[str | None, int]:
+    """Run the preview dry-run, converting an rsync failure into an exit code.
+
+    ``run_dry_run`` uses ``check=True``, so a non-zero rsync exit raises
+    ``CalledProcessError``. Both preview call sites used to let that escape
+    all the way out of :func:`irsync.cli.main`, so a routine rsync failure
+    (23 partial transfer, 24 vanished source files, 255 ssh error) surfaced
+    as a Python traceback with the exit code flattened to 1.
+
+    Returns:
+        ``(output, 0)`` when rsync succeeded, or ``(None, exit_code)`` when it
+        failed. A process killed by a signal reports a negative returncode,
+        which is not a usable exit status, so those map to
+        :data:`EXIT_REFUSED`.
+    """
+    try:
+        return run_dry_run(cmd), 0
+    except subprocess.CalledProcessError as e:
+        logging.error(
+            "rsync dry-run failed (exit %s); refusing to continue. Command: %r",
+            e.returncode,
+            cmd,
+        )
+        rc = e.returncode if e.returncode and e.returncode > 0 else EXIT_REFUSED
+        return None, rc
+
+
 def _show_preview(changes: Changes, *, interactive: bool) -> None:
     """Render the preview, paging through ``less`` if interactive."""
     text = _format_preview(changes)
@@ -402,7 +429,9 @@ def _run_backup_for_endpoints(
             ssh_port=args.ssh_port,
             ssh_key=args.ssh_key,
         )
-        out = run_dry_run(cmd)
+        out, rc = _dry_run_preview(cmd)
+        if out is None:
+            return rc
         print(out)
         return 0
 
@@ -484,7 +513,12 @@ def _run_rsync_only(
     # page through `less` and prompt for confirmation. Mirrors the snapshot
     # path's _show_preview(..., interactive=not args.yes) behavior so the
     # two code paths are consistent.
-    out = run_dry_run(dry_cmd)
+    out, preview_rc = _dry_run_preview(dry_cmd)
+    if out is None:
+        # The preview failed, so we have nothing to show the user and no
+        # evidence the real transfer would fare better. Abort before touching
+        # the destination.
+        return preview_rc
     if args.yes:
         print(out)
     else:
