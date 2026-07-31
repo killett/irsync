@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+from pathlib import Path
 
 import pytest
 
@@ -412,3 +414,66 @@ class TestProvenanceHeader:
         header, loaded = read_snapshot(out, expected_source_root=tmp_path)
         assert header is None
         assert loaded == rows
+
+
+class TestNestedMountBoundary:
+    """Task 6: a filesystem mounted inside the source is reported, not silently
+    dropped. Creating a real nested mount needs root, which this suite does
+    not have, so the boundary *decision* is tested directly via the pure
+    helper, and the aggregation/logging behavior is driven by monkeypatching
+    ``Path.lstat`` to report a foreign ``st_dev`` for one subdirectory."""
+
+    def test_helper_flags_only_cross_device_entries_when_xdev(self):
+        from irsync.snapshot import _crosses_boundary
+
+        assert _crosses_boundary(entry_dev=42, root_dev=7, xdev=True) is True
+        assert _crosses_boundary(entry_dev=7, root_dev=7, xdev=True) is False
+        # With xdev off the walk descends everywhere, so nothing is skipped.
+        assert _crosses_boundary(entry_dev=42, root_dev=7, xdev=False) is False
+
+    def test_walk_warns_once_when_a_boundary_is_skipped(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # A real nested mount needs root, so drive the boundary decision
+        # directly: report a foreign st_dev for one subdirectory.
+        (tmp_path / "normal").mkdir()
+        (tmp_path / "nested").mkdir()
+        real_lstat = Path.lstat
+
+        def fake_lstat(self):
+            st = real_lstat(self)
+            if self.name == "nested":
+                return os.stat_result(
+                    (
+                        st.st_mode,
+                        st.st_ino,
+                        st.st_dev + 1,
+                        st.st_nlink,
+                        st.st_uid,
+                        st.st_gid,
+                        st.st_size,
+                        int(st.st_atime),
+                        int(st.st_mtime),
+                        int(st.st_ctime),
+                    )
+                )
+            return st
+
+        monkeypatch.setattr(Path, "lstat", fake_lstat)
+
+        with caplog.at_level(logging.WARNING):
+            snapshot_tree(tmp_path)
+
+        warnings = [
+            r for r in caplog.records if "separate filesystem" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "nested" in warnings[0].getMessage()
+
+    def test_walk_emits_no_warning_when_nothing_is_skipped(self, caplog, tmp_path):
+        # Negative case for the aggregated warning: an ordinary tree with no
+        # device-crossing entries must not log anything at WARNING level.
+        _build_tree(tmp_path)
+        with caplog.at_level(logging.WARNING):
+            snapshot_tree(tmp_path)
+        assert caplog.records == []

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import stat
 from collections.abc import Iterable
 from pathlib import Path
@@ -44,6 +45,23 @@ class Row(TypedDict):
     path: str  # POSIX relative path from snapshot root
 
 
+def _crosses_boundary(*, entry_dev: int, root_dev: int, xdev: bool) -> bool:
+    """Return True if this entry sits on another filesystem and will be skipped.
+
+    Extracted so the boundary decision is directly testable: creating a real
+    nested mount requires privileges the test suite does not have.
+
+    Args:
+        entry_dev: The entry's ``st_dev``.
+        root_dev: The snapshot root's ``st_dev``.
+        xdev: If True, filesystem boundaries are enforced.
+
+    Returns:
+        True if ``xdev`` is enabled and ``entry_dev`` differs from ``root_dev``.
+    """
+    return xdev and entry_dev != root_dev
+
+
 def _file_type_char(
     mode: int, is_dir: bool, is_symlink: bool
 ) -> Literal["f", "d", "l", "o"]:
@@ -82,6 +100,7 @@ def snapshot_tree(
     """
     root = root.resolve()
     rows: list[Row] = []
+    skipped_mounts: list[str] = []
 
     try:
         st_root = root.lstat()
@@ -142,22 +161,43 @@ def snapshot_tree(
             ftype = _file_type_char(st.st_mode, is_dir, is_symlink)
             if ftype == "o" and not include_other:
                 continue
-            if not xdev or st.st_dev == root_dev:
-                rows.append(
-                    Row(
-                        dev=int(st.st_dev),
-                        ino=int(st.st_ino),
-                        type=ftype,
-                        nlink=int(st.st_nlink),
-                        size=int(st.st_size),
-                        mtime_ns=int(st.st_mtime_ns),
-                        btime_ns=_btime_ns(entry),
-                        path=rel,
-                    )
+
+            crosses = _crosses_boundary(
+                entry_dev=int(st.st_dev), root_dev=int(root_dev), xdev=xdev
+            )
+            if crosses:
+                if is_dir and not is_symlink:
+                    skipped_mounts.append(rel)
+                continue
+
+            rows.append(
+                Row(
+                    dev=int(st.st_dev),
+                    ino=int(st.st_ino),
+                    type=ftype,
+                    nlink=int(st.st_nlink),
+                    size=int(st.st_size),
+                    mtime_ns=int(st.st_mtime_ns),
+                    btime_ns=_btime_ns(entry),
+                    path=rel,
                 )
+            )
             # Descend into directories without following symlinks.
-            if is_dir and not is_symlink and (not xdev or st.st_dev == root_dev):
+            if is_dir and not is_symlink:
                 stack.append(entry)
+
+    if skipped_mounts:
+        shown = ", ".join(sorted(skipped_mounts)[:5])
+        more = (
+            f" (and {len(skipped_mounts) - 5} more)" if len(skipped_mounts) > 5 else ""
+        )
+        logging.warning(
+            "Skipped %d path(s) on a separate filesystem; they are NOT backed "
+            "up (rsync runs with --one-file-system too): %s%s",
+            len(skipped_mounts),
+            shown,
+            more,
+        )
 
     return rows
 
