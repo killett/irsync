@@ -54,24 +54,45 @@ Baseline before any edit: `ruff check .` clean, `ruff format --check .` clean,
   return value is meaningful for tests and for a future caller that wants to
   report it. Kept.
 
-### Known, not fixed here (behavior changes — need a decision)
+### Behavior changes — raised separately, then approved and fixed
 
-These are real defects, not style. A hygiene pass must not fix them silently.
+These were reported to the user rather than folded into the hygiene commits,
+because each changes observable behavior. All three were approved in the same
+session and landed with red/green tests.
 
-- **`src/irsync/__main__.py` discards `main()`'s return value**, so
-  `python -m irsync` always exits 0 — even on rsync failure, lock conflict, or
-  user abort. The `irsync` console script is unaffected (the generated wrapper
-  wraps it in `sys.exit`). Fix would be `raise SystemExit(main())`.
+- **`src/irsync/__main__.py` discarded `main()`'s return value**, so
+  `python -m irsync` always exited 0 — even on rsync failure, lock conflict, or
+  user abort. The `irsync` console script was unaffected (its generated wrapper
+  calls `sys.exit(main())`). Fixed in `ff9417a` with `raise SystemExit(main())`.
+  Consequence to remember: cron wrappers now see 75 for "another run holds the
+  lock" and 130 for a user abort, both of which are benign — treat them
+  separately from real failures.
 
 - **`run_dry_run` runs rsync with `check=True` and neither call site in
-  `backup.py` catches `CalledProcessError`.** rsync exits 23/24 on
-  partial-transfer / vanished-file, which is routine on a live tree, so the
-  preview can end in a traceback rather than a clean exit code.
+  `backup.py` caught `CalledProcessError`**, so rsync's routine 23/24/255
+  exits became a traceback with the code flattened to 1. Fixed in `9f932c8`
+  via `_dry_run_preview`, which logs rsync's code plus the argv and returns
+  that code; a negative returncode (signal-killed) maps to `EXIT_REFUSED`.
+  This deliberately keeps the codebase's uniform "any non-zero rsync is a
+  failure" policy — `run_real_sync` already refuses to persist the snapshot on
+  a non-zero return, and making the preview more permissive than the real run
+  would have split that policy in two.
 
-- **`run_all_backups` returns 0 when drives were missing** (the
-  `total_errors == 0 and missing` case warns but reports success). Cron reads
-  that as a clean run. This is the same partial-failure question already
-  listed under "Open questions" in `PROGRESS.md`.
+  Still open in the same area: `FileNotFoundError` (rsync not installed)
+  escapes as a traceback from both `run_dry_run` and `run_real_sync`. Not
+  fixed — it is a wider change than the preview boundary.
+
+- **`run_all_backups` returns 0 when drives were missing.** Investigated and
+  found to be *deliberate*, not a defect: `Options.all_backups` lists 16
+  entries covering every drive the user might ever attach, so on any given day
+  most are unmounted and a non-zero exit would make every nightly ALL sweep
+  look broken. The real problem was that the contract was undocumented while
+  the "Finished with issues" warning sat next to exit 0. `044c036` documents
+  the contract on `run_all_backups` and in the README, and reports the
+  previously-unused `successful` list in both summary log lines. Exit codes
+  unchanged. If cron alerting on an absent drive is ever wanted, the right
+  shape is a per-drive "expected" list, not a blanket `--strict-missing` flag
+  across all 16 entries.
 
 ### Environment observations
 
