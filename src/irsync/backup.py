@@ -18,6 +18,7 @@ from irsync.options import Endpoints, Options, resolve_endpoints
 from irsync.paths import with_trailing_slash
 from irsync.preflight import (
     EndpointNotMounted,
+    UnsafeDestination,
     check_mounted,
     foreign_dest_entries,
 )
@@ -225,6 +226,10 @@ def run_backup(
             mounted and ``args.allow_unmounted`` is not set. Callers that
             iterate several drives (:func:`run_all_backups`) catch this and
             treat it as a skip.
+        UnsafeDestination: If there is no usable snapshot baseline and the
+            destination cannot be read to check whether it is empty.
+            Callers that iterate several drives (:func:`run_all_backups`)
+            catch this and count it as a real error, not a skip.
     """
     # --snapshot-only doesn't need a destination at all — it just records the
     # current state of the source for use as a future baseline. Route around
@@ -625,6 +630,10 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
     that skips them still reports success. Only a real backup failure (a
     non-zero return from :func:`run_backup`) makes this return 1; a user
     abort propagates :data:`EXIT_ABORTED` and stops the remaining drives.
+    An unreadable destination (:class:`~irsync.preflight.UnsafeDestination`)
+    is never swallowed as a skip: it is counted as an error, same as a
+    non-zero ``run_backup`` return, and the batch continues to the next
+    drive rather than aborting.
 
     Both the skipped and the successfully-backed-up entries are named in the
     summary log line so a cron log records what actually happened.
@@ -649,6 +658,17 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
         except (FileNotFoundError, NotADirectoryError, EndpointNotMounted) as e:
             logging.error("Skipping %r (missing/unmounted drive): %s", backup, e)
             missing.append(backup)
+            continue
+        except UnsafeDestination as e:
+            # Unlike a missing/unmounted drive, this is not a benign absence —
+            # the destination exists but couldn't be checked for safety. It
+            # counts as a real error (never silently a skip) but does not
+            # abort the batch; the next drive still gets a chance.
+            logging.error("Error backing up %r: %s", backup, e)
+            total_errors += 1
+            if total_errors >= options.max_errors:
+                logging.error("Max errors (%d) reached; stopping.", options.max_errors)
+                return 1
             continue
         if rc == 0:
             successful.append(backup)

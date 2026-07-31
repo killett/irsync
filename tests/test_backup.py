@@ -1347,3 +1347,31 @@ class TestDestinationGate:
             args=_args(),
         )
         assert rc == 0
+
+
+class TestRunAllBackupsUnsafeDestination:
+    def test_unsafe_destination_counts_as_error_not_skip_and_batch_continues(
+        self, basic_options, monkeypatch
+    ):
+        # An unreadable destination is not a benign absence like a missing or
+        # unmounted drive - it must be a real error (exit code 1), unlike the
+        # missing/unmounted skip contract from 044c036. It also must not
+        # abort the whole ALL batch: drives after the bad one still get a
+        # chance to run.
+        from irsync.preflight import UnsafeDestination
+
+        attempted: list[str] = []
+
+        def fake_backup(*, source_arg, destination_arg, options, args):
+            attempted.append(source_arg)
+            if source_arg == "H":
+                raise UnsafeDestination("H's destination cannot be read")
+            return 0
+
+        monkeypatch.setattr("irsync.backup.run_backup", fake_backup)
+        basic_options.all_backups = ["G", "H", "~"]
+
+        rc = run_all_backups(options=basic_options, args=_args())
+
+        assert attempted == ["G", "H", "~"], "batch must continue past the bad drive"
+        assert rc == 1, "an unreadable destination must not keep the exit code at 0"
