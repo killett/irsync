@@ -1375,3 +1375,54 @@ class TestRunAllBackupsUnsafeDestination:
 
         assert attempted == ["G", "H", "~"], "batch must continue past the bad drive"
         assert rc == 1, "an unreadable destination must not keep the exit code at 0"
+
+
+class TestFirstRunPreview:
+    def test_first_backup_prints_a_summary_before_confirming(
+        self, src_dest, basic_options, capsys
+    ):
+        # D: with no baseline, changes is None, so _show_preview was skipped
+        # and the user confirmed a full transfer plus deletions blind.
+        src, dest = src_dest
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "FIRST BACKUP" in out
+        assert str(src) in out
+        assert str(dest) in out
+        assert "DELETE" in out
+
+    def test_interactive_first_run_pages_instead_of_printing(
+        self, src_dest, basic_options, monkeypatch, capsys
+    ):
+        # AD-7: only --yes writes straight to stdout. Interactively the
+        # summary must go through the same pager as the diffed preview,
+        # not straight to print().
+        src, dest = src_dest
+        paged: list[str] = []
+        monkeypatch.setattr(
+            "irsync.backup._page_output", lambda text: paged.append(text)
+        )
+        monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(yes=False),
+        )
+
+        assert rc == 0
+        assert len(paged) == 1
+        assert "FIRST BACKUP" in paged[0]
+        out = capsys.readouterr().out
+        assert "FIRST BACKUP" not in out, (
+            "interactive mode must not also print the summary to stdout"
+        )

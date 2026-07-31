@@ -157,6 +157,52 @@ def _format_preview(changes: Changes) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _format_size(total_bytes: int) -> str:
+    """Render a byte count as a human-scaled ``value unit`` string.
+
+    A fixed GiB unit reads as "0.0 GiB" for any source under half a
+    gibibyte, which is accurate but useless for judging scale on a small
+    tree. Scaling to the largest unit under which the value is at least 1
+    (falling back to bytes) keeps the summary meaningful across both a
+    handful of config files and a multi-terabyte archive, with no added
+    dependency.
+    """
+    value = float(total_bytes)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TiB"  # unreachable, satisfies mypy's no-implicit-return
+
+
+def _format_first_run_preview(
+    rows: list[Row],
+    src_root: Path,
+    dest_root: Path | None,
+    foreign_count: int,
+) -> str:
+    """Summarize a backup that has no baseline to diff against.
+
+    With no prior snapshot there is no move/delete plan to show, but the run
+    is the most consequential one: it transfers the whole source and removes
+    anything at the destination that is not on it. Report the scale of both
+    so the confirmation prompt is not answered blind.
+    """
+    total_bytes = sum(r["size"] for r in rows if r["type"] == "f")
+    size_str = _format_size(total_bytes)
+    dest_desc = "n/a (remote)" if dest_root is None else str(dest_root)
+    lines = [
+        "=== FIRST BACKUP — no prior snapshot ===",
+        f"Source:      {src_root}   {len(rows):,} entries, {size_str}",
+        f"Destination: {dest_desc}   {foreign_count} existing entries",
+        "rsync will transfer the source in full and DELETE anything at the",
+        "destination that is not on the source.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _dry_run_preview(cmd: list[str]) -> tuple[str | None, int]:
     """Run the preview dry-run, converting an rsync failure into an exit code.
 
@@ -481,6 +527,12 @@ def _run_backup_for_endpoints(
     # mode, dump it once so the run is at least auditable in scrollback / logs.
     if changes is not None:
         _show_preview(changes, interactive=not args.yes)
+    else:
+        text = _format_first_run_preview(fresh_rows, src_root, dest_root, len(foreign))
+        if args.yes:
+            print(text)
+        else:
+            _page_output(text)
     if not _confirm_or_abort(args):
         logging.info("Aborted by user.")
         return EXIT_ABORTED
