@@ -1,0 +1,68 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-31-mount-safety.md",
+  "specPath": "docs/superpowers/specs/2026-07-31-mount-safety-design.md",
+  "tasks": [
+    {
+      "id": 1,
+      "nativeTaskId": 10,
+      "subject": "Task 1: Preflight mount-gate primitives",
+      "status": "pending",
+      "description": "**Goal:** A new `preflight.py` exposing the typed exceptions and the mount-gate functions, fully unit-tested, wired to nothing yet.\n\n**Files:**\n- Create: `src/irsync/preflight.py`\n- Test: `tests/test_preflight.py`\n\n**Acceptance Criteria:**\n- [ ] `mount_gate_root` returns the first path component below `base_dir`, or `None` for paths outside `base_dir` and for `base_dir` itself\n- [ ] `check_mounted` returns silently for `str` endpoints (remotes)\n- [ ] `check_mounted` raises `EndpointNotMounted` when the gate component is not a mountpoint\n- [ ] `check_mounted` with `gate_outside_base=True` checks the endpoint itself when it is outside `base_dir`\n- [ ] `mypy --strict` passes on the new module\n\n**Verify:** `pixi run python -m pytest tests/test_preflight.py -v`\n\n```json:metadata\n{\"files\": [\"src/irsync/preflight.py\", \"tests/test_preflight.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_preflight.py -v\", \"acceptanceCriteria\": [\"mount_gate_root returns first component below base_dir or None\", \"check_mounted exempts str/remote endpoints\", \"check_mounted raises EndpointNotMounted for unmounted gate path\", \"gate_outside_base=True checks the endpoint itself\", \"mypy strict passes\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 2,
+      "nativeTaskId": 11,
+      "subject": "Task 2: Wire mount gate into backup flow",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** The mount gate runs before any file is created, `ALL` treats an unmounted drive as a skip, and `--allow-unmounted` / `--require-mount` control it.\n\n**Files:**\n- Modify: `src/irsync/backup.py` (`run_backup`, `_run_snapshot_only`, `run_all_backups`)\n- Modify: `src/irsync/cli.py` (new flags)\n- Modify: `tests/test_backup.py` (`_args` defaults, new tests)\n- Modify: `tests/test_integration.py` (`_args` defaults only)\n\n**Acceptance Criteria:**\n- [ ] The gate runs after `resolve_endpoints` and BEFORE `_source_lock`\n- [ ] `--allow-unmounted` bypasses the gate; `--require-mount` extends it outside `base_dir`\n- [ ] `run_all_backups` records an unmounted drive as missing/skipped and still returns 0\n- [ ] `_run_snapshot_only` performs the same check before its own lock\n\n**Verify:** `pixi run python -m pytest tests/test_backup.py -v -k \"MountGate or RunAllBackups\"`\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"src/irsync/cli.py\", \"tests/test_backup.py\", \"tests/test_integration.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_backup.py -v -k \\\"MountGate or RunAllBackups\\\"\", \"acceptanceCriteria\": [\"gate runs before _source_lock; no lockfile written on refusal\", \"--allow-unmounted bypasses, --require-mount extends\", \"run_all_backups counts unmounted as missing and returns 0\", \"_run_snapshot_only checks before its lock\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 3,
+      "nativeTaskId": 12,
+      "subject": "Task 3: Destination gate for baseline-less runs",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** A first-backup-shaped run refuses when the destination already holds data, closing hazard A for explicit-path runs that never touch `base_dir`.\n\n**Files:**\n- Modify: `src/irsync/preflight.py` (add `foreign_dest_entries`)\n- Modify: `src/irsync/backup.py` (`_run_backup_for_endpoints`)\n- Modify: `src/irsync/cli.py` (`--allow-nonempty-dest`)\n- Modify: `tests/test_preflight.py`, `tests/test_backup.py`\n\n**Acceptance Criteria:**\n- [ ] `foreign_dest_entries` excludes irsync's reserved namespace\n- [ ] `foreign_dest_entries` raises `UnsafeDestination` when the destination cannot be read\n- [ ] A baseline-less run into a non-empty destination returns `EXIT_REFUSED` and leaves the destination intact\n- [ ] `--allow-nonempty-dest` permits the run\n\n**Verify:** `pixi run python -m pytest tests/test_preflight.py tests/test_backup.py -v -k \"Foreign or DestinationGate\"`\n\n```json:metadata\n{\"files\": [\"src/irsync/preflight.py\", \"src/irsync/backup.py\", \"src/irsync/cli.py\", \"tests/test_preflight.py\", \"tests/test_backup.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_preflight.py tests/test_backup.py -v -k \\\"Foreign or DestinationGate\\\"\", \"acceptanceCriteria\": [\"reserved namespace excluded from foreign entries\", \"unreadable destination raises UnsafeDestination\", \"baseline-less run into non-empty dest returns EXIT_REFUSED and preserves data\", \"--allow-nonempty-dest permits the run\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 4,
+      "nativeTaskId": 13,
+      "subject": "Task 4: First-run preview",
+      "status": "pending",
+      "blockedBy": [3],
+      "description": "**Goal:** A run with no baseline shows what it is about to do before asking for confirmation.\n\n**Files:**\n- Modify: `src/irsync/backup.py` (`_format_first_run_preview`, `_run_backup_for_endpoints`)\n- Modify: `tests/test_backup.py`\n\n**Acceptance Criteria:**\n- [ ] The summary names the source, its entry count and total size, the destination, and its existing-entry count\n- [ ] The summary states that non-matching destination content will be deleted\n- [ ] Under `--yes` it reaches stdout (AD-7); interactively it goes through the pager\n- [ ] Counts come from `fresh_rows` and the Task 3 `iterdir` — no extra tree scan\n\n**Verify:** `pixi run python -m pytest tests/test_backup.py -v -k FirstRunPreview`\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"tests/test_backup.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_backup.py -v -k FirstRunPreview\", \"acceptanceCriteria\": [\"summary names source, entry count, size, destination, existing entries\", \"summary states deletion consequence\", \"reaches stdout under --yes, pager interactively\", \"no extra tree scan\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 5,
+      "nativeTaskId": 14,
+      "subject": "Task 5: Clean refusals instead of tracebacks",
+      "status": "pending",
+      "blockedBy": [1, 2],
+      "description": "**Goal:** Missing rsync, a read-only source root, and a missing source path all produce a logged refusal and exit 2 rather than a stack trace.\n\n**Files:**\n- Modify: `src/irsync/preflight.py` (`check_rsync_available`)\n- Modify: `src/irsync/backup.py` (`run_backup`, `_source_lock` call sites)\n- Modify: `src/irsync/cli.py` (`main` exception boundary)\n- Modify: `tests/test_preflight.py`, `tests/test_backup.py`, `tests/test_cli.py`\n\n**Acceptance Criteria:**\n- [ ] `shutil.which(\"rsync\")` returning `None` produces `EXIT_REFUSED` with an actionable message\n- [ ] A read-only source root produces `EXIT_REFUSED`, not `PermissionError`\n- [ ] A missing source path in a single-drive run produces `EXIT_REFUSED`, not a traceback\n- [ ] `run_all_backups` still catches `FileNotFoundError` first\n\n**Verify:** `pixi run python -m pytest tests/test_backup.py tests/test_preflight.py -v -k \"CleanRefusal or RsyncAvailable\"`\n\n```json:metadata\n{\"files\": [\"src/irsync/preflight.py\", \"src/irsync/backup.py\", \"src/irsync/cli.py\", \"tests/test_preflight.py\", \"tests/test_backup.py\", \"tests/test_cli.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_backup.py tests/test_preflight.py -v -k \\\"CleanRefusal or RsyncAvailable\\\"\", \"acceptanceCriteria\": [\"missing rsync yields EXIT_REFUSED\", \"read-only source root yields EXIT_REFUSED not PermissionError\", \"missing source path exits 2 with no traceback\", \"ALL still skips absent drives\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 6,
+      "nativeTaskId": 15,
+      "subject": "Task 6: Warn on skipped nested mounts",
+      "status": "pending",
+      "description": "**Goal:** A filesystem mounted inside the source is reported rather than silently excluded from the backup.\n\n**Files:**\n- Modify: `src/irsync/snapshot.py` (`snapshot_tree`, new `_crosses_boundary` helper)\n- Modify: `tests/test_snapshot.py`\n\n**Acceptance Criteria:**\n- [ ] `_crosses_boundary` returns True only when `xdev` is on and the device differs\n- [ ] `snapshot_tree` emits exactly one aggregated warning naming the count and the first few paths\n- [ ] No warning when nothing is skipped\n- [ ] `snapshot_tree`'s signature and return type are unchanged\n\n**Verify:** `pixi run python -m pytest tests/test_snapshot.py -v -k Boundary`\n\n```json:metadata\n{\"files\": [\"src/irsync/snapshot.py\", \"tests/test_snapshot.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_snapshot.py -v -k Boundary\", \"acceptanceCriteria\": [\"_crosses_boundary true only when xdev and device differs\", \"one aggregated warning with count and sample paths\", \"no warning when nothing skipped\", \"snapshot_tree signature unchanged\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 7,
+      "nativeTaskId": 16,
+      "subject": "Task 7: Split --force from the deletion guard",
+      "status": "pending",
+      "description": "**Goal:** `--force` means only \"run even though nothing changed\"; bypassing the catastrophic-delete guard requires `--allow-massive-delete`.\n\n**Files:**\n- Modify: `src/irsync/backup.py:398` (the guard condition)\n- Modify: `src/irsync/cli.py` (new flag, conflict check)\n- Modify: `tests/test_backup.py` (`TestCatastrophicDiffSanityCheck`)\n- Modify: `tests/test_cli.py` (conflict test)\n\n**Acceptance Criteria:**\n- [ ] `--force` alone no longer bypasses the >50% deletion refusal\n- [ ] `--allow-massive-delete` bypasses it\n- [ ] `--force` still defeats the no-change short-circuit\n- [ ] `--allow-massive-delete` with `--no-snapshot` is rejected at parse time\n\n**Verify:** `pixi run python -m pytest tests/test_backup.py tests/test_cli.py -v -k \"Catastrophic or Force or massive\"`\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"src/irsync/cli.py\", \"tests/test_backup.py\", \"tests/test_cli.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_backup.py tests/test_cli.py -v -k \\\"Catastrophic or Force or massive\\\"\", \"acceptanceCriteria\": [\"--force alone no longer bypasses the 50% guard\", \"--allow-massive-delete bypasses it\", \"--force still defeats the no-change short-circuit\", \"--allow-massive-delete with --no-snapshot rejected at parse time\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 8,
+      "nativeTaskId": 17,
+      "subject": "Task 8: Document the new guards",
+      "status": "pending",
+      "blockedBy": [2, 3, 4, 5, 6, 7],
+      "description": "**Goal:** README, architecture doc, and hygiene notes describe the new guards.\n\n**Files:**\n- Modify: `README.md`\n- Modify: `docs/design/irsync-architecture.md`\n- Modify: `docs/hygiene-notes.md`\n\n**Acceptance Criteria:**\n- [ ] README documents all five flags and the fail-closed posture\n- [ ] README's first-use guidance warns that an unmounted drive was the motivating hazard\n- [ ] The architecture doc gains AD-24, AD-25, AD-26\n- [ ] `docs/hygiene-notes.md` records that hazards A–G are now closed, and that F has no end-to-end test\n\n**Verify:** `pixi run pre-commit run --all-files`\n\n```json:metadata\n{\"files\": [\"README.md\", \"docs/design/irsync-architecture.md\", \"docs/hygiene-notes.md\"], \"verifyCommand\": \"pixi run pre-commit run --all-files\", \"acceptanceCriteria\": [\"README documents all five flags and fail-closed posture\", \"README first-use guidance names the unmounted-drive hazard\", \"architecture doc gains AD-24/25/26\", \"hygiene-notes records A-G closed and F's missing e2e test\"], \"modelTier\": \"mechanical\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-31"
+}
