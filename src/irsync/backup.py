@@ -33,6 +33,12 @@ from irsync.snapshot import (
 # tree is gone — almost always a swapped-args / wrong-snapshot accident.
 CATASTROPHIC_DELETE_RATIO: float = 0.5
 
+# Process exit codes. Named so the non-obvious values aren't bare literals
+# scattered across the orchestrator's early returns.
+EXIT_REFUSED: int = 2  # bad invocation / refused for safety; nothing was written
+EXIT_LOCK_HELD: int = 75  # EX_TEMPFAIL — another run holds the lock, try again later
+EXIT_ABORTED: int = 130  # 128 + SIGINT, the shell convention for "user aborted"
+
 
 @contextlib.contextmanager
 def _source_lock(src_root: Path) -> Iterator[None]:
@@ -69,7 +75,7 @@ def _log_lock_conflict(root: Path) -> int:
         root,
         root / LOCKFILE_NAME,
     )
-    return 75  # EX_TEMPFAIL — try again later
+    return EXIT_LOCK_HELD
 
 
 def _atomic_write_snapshot(rows: list[Row], source_root: Path, target: Path) -> None:
@@ -305,7 +311,7 @@ def _run_backup_for_endpoints(
     if args.snapshot_only:
         if src_root is None:
             logging.error("--snapshot-only requires a local source.")
-            return 2
+            return EXIT_REFUSED
         rows = snapshot_tree(src_root)
         _atomic_write_snapshot(rows, src_root, src_root / SNAPSHOT_FILENAME)
         logging.info(
@@ -374,7 +380,7 @@ def _run_backup_for_endpoints(
                     len(before_rows),
                     ratio * 100,
                 )
-                return 2
+                return EXIT_REFUSED
 
     # Always show the preview before confirming. In interactive mode, page it
     # through less so the user can scroll through the deletion list. In --yes
@@ -383,7 +389,7 @@ def _run_backup_for_endpoints(
         _show_preview(changes, interactive=not args.yes)
     if not _confirm_or_abort(args):
         logging.info("Aborted by user.")
-        return 130
+        return EXIT_ABORTED
 
     # --dry-run: show the rsync dry-run; don't touch dest tree or persist snapshot.
     if args.dry_run:
@@ -429,7 +435,7 @@ def _run_backup_for_endpoints(
                 "optimization.",
                 e,
             )
-            return 2
+            return EXIT_REFUSED
         logging.info(
             "Replay: %d dir moves applied, %d file moves applied, %d skipped.",
             result.dirs_moved,
@@ -484,7 +490,7 @@ def _run_rsync_only(
     else:
         _page_output(out)
         if not _confirm_or_abort(args):
-            return 130
+            return EXIT_ABORTED
     cmd = build_rsync_command(
         source=src_str,
         dest=dest_str,
@@ -534,7 +540,7 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
             continue
         if rc == 0:
             successful.append(backup)
-        elif rc == 130:
+        elif rc == EXIT_ABORTED:
             logging.info("User aborted; stopping ALL processing.")
             return rc
         else:
