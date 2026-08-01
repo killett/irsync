@@ -311,9 +311,10 @@ to mutation for the documentation fixes and to deleting the dead public helpers.
 `write_jsonl` used to write — a user upgrading across the provenance-header
 change has one on disk. So the tests were triaged rather than deleted with the
 functions: the two that only duplicated a `read_snapshot` equivalent went, and
-the four covering surviving behavior (missing-key rejection, legacy
-btime-sentinel default, `header is None` on a headerless file, surrogate-path
-round-trip) were ported to `read_snapshot`. Producing a headerless file is now
+the five covering surviving behavior (one-JSON-object-per-line output,
+missing-key rejection, legacy btime-sentinel default, `header is None` on a
+headerless file, surrogate-path round-trip) were ported to
+`write_snapshot`/`read_snapshot`. Producing a headerless file is now
 `_write_headerless` in `test_snapshot.py`: an input format the product must
 still *read* but no longer *writes* belongs in the test scaffolding, not in
 `irsync.snapshot`.
