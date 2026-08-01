@@ -160,13 +160,14 @@ Design doc: `docs/superpowers/specs/2026-07-31-mount-safety-design.md`
   than 5 skipped paths) is untested, as is `include_other=True` combined with
   a crossed filesystem boundary. Both are plausible in production and neither
   has a regression test.
-- **The destination gate fires before the `--dry-run` branch.** In
-  `_run_backup_for_endpoints`, the baseline-less destination check runs before
-  the `args.dry_run` branch is reached, so a read-only dry run against a
-  non-empty first-run destination also refuses rather than merely previewing.
-  Contestable — a dry run arguably shouldn't be blocked by a guard whose whole
-  point is preventing writes — but recorded here rather than changed, since
-  changing it was out of this pass's scope.
+- **The destination gate has a `--dry-run` carve-out.** In
+  `_run_backup_for_endpoints`, the baseline-less destination check
+  (`backup.py:665`) is gated on `not args.dry_run`, so a dry run against a
+  non-empty first-run destination previews instead of refusing — `foreign`
+  is still computed unconditionally so the first-run preview (Rule 3) can
+  report it. The empty-source guard just above it (`backup.py:640`) has no
+  such carve-out and runs first, so it still pre-empts the destination
+  gate's dry-run exemption whenever the source itself is empty; see AD-28.
 - **The `PermissionError` log-and-return block is duplicated verbatim**
   between `run_backup` and `_run_snapshot_only` in `src/irsync/backup.py`
   (each catches a read-only source root around its own `_source_lock` call
@@ -209,3 +210,65 @@ project owner and implemented as follow-up commits on this same branch.
   `--allow-empty-source`, one override per guard as usual. Deliberately
   does not fire when a baseline exists, so a genuine mass-deletion still
   goes through the existing >50% guard instead of this one. See AD-28.
+
+### Hazard H — `--dry-run` ran a real, destructive rsync on `--no-snapshot`
+
+Found in a post-merge review of `_run_rsync_only` after the branch above was
+otherwise complete and reviewed (252 passed, 1 skipped): it built a dry-run
+command for the preview and then unconditionally built a SECOND, real
+(`dry_run=False`) command and called `run_real_sync` — `args.dry_run` was
+never consulted on this path. Confirmed by reproduction:
+`irsync SRC DEST --no-snapshot --dry-run --yes` against a destination
+holding a file not present on the source deleted that file for real, then
+reported `rsync completed successfully` and exit 0.
+
+**Pre-existing, not introduced by this branch.** It survived unnoticed
+because every other reproduction in this pass used the snapshot path, where
+`--dry-run` was already honored correctly (`backup.py:696`); `--no-snapshot`
+is comparatively rarely exercised end to end (see "11th-pass dimensions" in
+`PROGRESS.md`).
+
+Fixed by adding an `args.dry_run` check to `_run_rsync_only` right after the
+preview (which, on this path, already *is* rsync's `--dry-run` output):
+return 0 before building the real command, matching the snapshot path's own
+`--dry-run` contract. See AD-30. Covered by three tests in
+`tests/test_backup.py::TestNoSnapshotDryRunHonored`: one runs the real rsync
+binary (no mocking) so a regression shows up as actual data loss and not
+merely a changed return code — verified to fail against the pre-fix code
+before the fix landed — one confirms `--no-snapshot` without `--dry-run`
+still performs the real sync, and one monkeypatches `run_real_sync` to fail
+the test if it is called at all during a dry run.
+
+### Minor findings from the same review
+
+- **M1 — `source_root_is_empty` didn't fail closed on `PermissionError`.**
+  Its sibling `foreign_dest_entries` deliberately raises `UnsafeDestination`
+  when the destination can't be listed, rather than guessing;
+  `source_root_is_empty` caught only `FileNotFoundError`/`NotADirectoryError`
+  and had no `Raises:` section documenting the gap. In practice
+  `run_backup`'s own broad `except PermissionError` around
+  `_run_backup_for_endpoints` already converts this into a plain refusal
+  before it can reach `run_all_backups` or `cli.main` — so, checked against
+  the actual code rather than assumed, this was not currently producing a
+  traceback. Documented the `Raises:` section, added `PermissionError` to
+  `run_all_backups`' and `cli.main`'s exception handling as a backstop for
+  the earlier `resolve_endpoints`/`check_mounted` window that isn't covered
+  by that broad catch, and added `test_unreadable_source_fails_closed` in
+  `test_preflight.py`.
+- **M2 — a comment claimed `--no-snapshot` "has no concept of a prior
+  snapshot at all."** False: a snapshot file can exist on disk from an
+  earlier run; what's true is that this code path never reads one. Reworded
+  at `backup.py:557` to state the actual consequence: a user with a real
+  baseline who genuinely emptied their source and runs `--no-snapshot` is
+  steered to `--allow-empty-source` rather than `--allow-massive-delete`,
+  because the >50% guard is unreachable on this path.
+- **M3 — this file's own coverage-gap bullet had gone stale.** It said the
+  destination gate refuses on `--dry-run`; the `not args.dry_run` carve-out
+  at `backup.py:665` (added in this same pass, see AD-25/AD-28 above)
+  contradicts that. Corrected above.
+- **M4 — AD-28 didn't record the dry-run asymmetry as intentional.** The
+  empty-source guard is deliberately *not* `--dry-run`-exempt, unlike the
+  destination gate, and since it runs first it pre-empts the destination
+  gate's carve-out whenever the source is empty. Added to AD-28: a dry-run
+  preview of an empty source is a wall of deletions that conveys less than
+  the refusal message does.

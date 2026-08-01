@@ -83,6 +83,14 @@ the destination, and irsync would exit 0 and call it a successful backup.
   stale-snapshot accident. `--allow-massive-delete` overrides it. `--force`
   does *not* — it only means "run rsync even though the snapshot diff found
   no changes."
+- **`--dry-run` changes nothing.** Honored on both the normal (snapshot)
+  path and `--no-snapshot`: irsync shows what rsync would do and exits 0
+  without touching the destination or persisting a snapshot, on either
+  path. Note that the empty-source refusal above is deliberately **not**
+  `--dry-run`-exempt (a preview of an empty source is a wall of deletions,
+  which conveys less than the refusal message does), so it still fires
+  first even under `--dry-run`; the nonempty-destination refusal, by
+  contrast, is exempt and merely previews.
 
 | Flag | Effect |
 |---|---|

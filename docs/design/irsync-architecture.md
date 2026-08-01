@@ -442,6 +442,11 @@ so a baseline that already exists routes a 100%-deletion source instead
 through the existing >50% guard (AD-6) — deliberately not through this one,
 to avoid two guards firing on the same event. Override: `--allow-empty-source`,
 one flag for this guard alone (AD-26's one-override-per-guard rule).
+Unlike the destination gate (AD-25), this guard is deliberately **not**
+`--dry-run`-exempt, and because it runs first, it pre-empts the destination
+gate's `--dry-run` carve-out whenever the source itself is empty. This is
+intentional, not an oversight: a dry-run preview of an empty source is a
+wall of deletions that conveys less than the refusal message does.
 
 ### 29. `check_mounted` takes a `role`; an unmounted destination is an ALL error, not a skip
 
@@ -461,6 +466,21 @@ subclass caught after its parent is dead code — and handles it exactly like
 `UnsafeDestination` (AD-25): counted in `total_errors`, batch continues, run
 exits 1. Single-drive runs are unaffected: both subclasses still reach
 `cli.main`'s refusal boundary as exit 2.
+
+### 30. `--no-snapshot --dry-run` honors `--dry-run` (hazard H)
+
+Pre-existing bug, found in a post-merge review of `_run_rsync_only`, not
+introduced by this branch: it built a dry-run command for the preview and
+then unconditionally built a second, real (`dry_run=False`) command and
+called `run_real_sync` — `args.dry_run` was never consulted, so
+`--no-snapshot --dry-run` ran a real `rsync --delete-before`. The snapshot
+path already got this right at its own `--dry-run` check (`backup.py:696`):
+show the preview, confirm, then return 0 without touching dest or
+persisting a snapshot. `_run_rsync_only` now checks `args.dry_run` right
+after showing the same preview (which, on this path,
+already *is* rsync's `--dry-run` output — there is no separate diff view to
+show twice) and returns 0 before building the real command, so both paths
+share the same contract: preview shown, nothing touched, exit 0.
 
 ## Appendix A — bug catalog
 
