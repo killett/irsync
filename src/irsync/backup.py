@@ -557,10 +557,17 @@ def _run_backup_for_endpoints(
         elif args.no_snapshot and not args.allow_empty_source:
             # --no-snapshot never walks the tree, so there is no fresh_rows
             # for fresh_snapshot_is_empty to inspect (that check covers the
-            # snapshot path below), and --no-snapshot also has no concept of
-            # a prior snapshot at all, so a baseline can never exist here.
-            # An empty source is therefore unconditionally the
-            # unmounted/mistyped-source signature on this path.
+            # snapshot path below). A baseline file CAN still exist on disk
+            # from an earlier snapshot-taking run — what's true is that this
+            # code path never reads or consults one, so it can't tell a
+            # genuine "I emptied my source on purpose" run (which a real
+            # baseline would prove) from the unmounted/mistyped-source
+            # signature. Consequence: a user with a real baseline who
+            # genuinely emptied their source and runs --no-snapshot is
+            # steered to --allow-empty-source rather than
+            # --allow-massive-delete, because the >50% deletion guard is
+            # unreachable on this path (it only runs where a baseline is
+            # actually read, in the snapshot branch below).
             if source_root_is_empty(src_root):
                 logging.error(
                     "Refusing: source %s is empty and --no-snapshot has no "
@@ -799,6 +806,17 @@ def _run_rsync_only(
         _page_output(out)
         if not _confirm_or_abort(args):
             return EXIT_ABORTED
+
+    # Hazard H fix: --dry-run was never consulted on this path, so
+    # `--no-snapshot --dry-run` fell through to a real, destructive rsync
+    # despite the flag. The dry-run preview above already IS rsync's
+    # --dry-run output, so honoring the flag here is just: stop before the
+    # real transfer and report success, changing nothing — the same
+    # contract the snapshot path applies at its own --dry-run check
+    # (backup.py:696).
+    if args.dry_run:
+        return 0
+
     cmd = build_rsync_command(
         source=src_str,
         dest=dest_str,
@@ -844,10 +862,17 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
     :class:`~irsync.preflight.DestinationNotMounted` — like an unreadable
     destination (:class:`~irsync.preflight.UnsafeDestination`) — is counted
     as a real error, same as a non-zero ``run_backup`` return, and the
-    batch continues to the next drive rather than aborting. Only a real
-    backup failure or an unmounted/unreadable destination makes this
-    return 1; a user abort propagates :data:`EXIT_ABORTED` and stops the
-    remaining drives.
+    batch continues to the next drive rather than aborting. A bare
+    :class:`PermissionError` is caught alongside them as a backstop: most
+    permission failures (e.g. :func:`~irsync.preflight.source_root_is_empty`
+    on the ``--no-snapshot`` path) are already turned into a plain non-zero
+    return inside ``run_backup`` itself, but one raised earlier — from
+    ``resolve_endpoints``/``check_mounted``, before ``run_backup``'s own
+    try/except is entered — would otherwise escape uncaught here and abort
+    the whole batch instead of just the one drive. Only a real backup
+    failure, an unmounted/unreadable destination, or an unreadable source
+    makes this return 1; a user abort propagates :data:`EXIT_ABORTED` and
+    stops the remaining drives.
 
     Both the skipped and the successfully-backed-up entries are named in the
     summary log line so a cron log records what actually happened.
@@ -869,16 +894,25 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
                 options=options,
                 args=args,
             )
-        except (DestinationNotMounted, UnsafeDestination) as e:
+        except (DestinationNotMounted, UnsafeDestination, PermissionError) as e:
             # Caught BEFORE the (broader) EndpointNotMounted clause below:
             # DestinationNotMounted is a subclass of it, and a subclass must
             # be caught before its parent or this handler is dead code.
-            # Unlike a missing/unmounted SOURCE, neither of these is a
-            # benign absence — the run would silently back up nothing (an
+            # Unlike a missing/unmounted SOURCE, none of these is a benign
+            # absence — the run would silently back up nothing (an
             # unmounted destination) or the destination couldn't be checked
-            # for safety at all (unreadable). Both count as a real error
-            # (never silently a skip) but do not abort the batch; the next
-            # drive still gets a chance.
+            # for safety at all (unreadable). PermissionError is caught here
+            # too as a backstop: run_backup already converts a
+            # PermissionError raised inside _run_backup_for_endpoints (e.g.
+            # from preflight.source_root_is_empty on the --no-snapshot path)
+            # into a plain non-zero return, so in practice this clause only
+            # fires for a PermissionError raised *before* that point
+            # (resolve_endpoints/check_mounted, which run outside
+            # run_backup's own try/except). Either way, an unreadable path
+            # is a real misconfiguration, not "drive absent today", so it
+            # fails closed the same way an unreadable destination does: all
+            # three count as a real error (never silently a skip) but do
+            # not abort the batch; the next drive still gets a chance.
             logging.error("Error backing up %r: %s", backup, e)
             total_errors += 1
             if total_errors >= options.max_errors:

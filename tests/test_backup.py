@@ -1094,6 +1094,83 @@ class TestDryRunFailureHandled:
         assert rc > 0
 
 
+class TestNoSnapshotDryRunHonored:
+    """Hazard H: ``--no-snapshot --dry-run`` must not run a real rsync.
+
+    ``_run_rsync_only`` used to build a dry-run command for the preview and
+    then unconditionally build a SECOND, real (``dry_run=False``) command
+    and call ``run_real_sync`` — ``args.dry_run`` was never consulted on
+    this path, so ``--no-snapshot --dry-run`` deleted anything at the
+    destination not present on the source. The snapshot path already
+    honored ``--dry-run`` correctly (``backup.py:696``); this brings the
+    two paths in line.
+
+    ``test_dry_run_leaves_destination_untouched`` deliberately does not
+    monkeypatch ``run_dry_run``/``run_real_sync``: it runs the real rsync
+    binary so a regression shows up as actual data loss on disk, not merely
+    a changed return code. It fails against the pre-fix code.
+    """
+
+    def test_dry_run_leaves_destination_untouched(self, src_dest, basic_options):
+        src, dest = src_dest
+        precious = dest / "precious.txt"
+        precious.write_text("precious original content")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(no_snapshot=True, dry_run=True),
+        )
+
+        assert rc == 0
+        assert precious.exists(), (
+            "--no-snapshot --dry-run deleted a destination-only file "
+            "(hazard H): --dry-run must change nothing"
+        )
+        assert precious.read_text() == "precious original content"
+
+    def test_without_dry_run_still_performs_real_sync(self, src_dest, basic_options):
+        # Guard against over-correcting hazard H into "--no-snapshot never
+        # syncs": without --dry-run the real, destructive transfer must
+        # still happen exactly as before.
+        src, dest = src_dest
+        stale = dest / "stale.txt"
+        stale.write_text("not on source; a real sync must remove it")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(no_snapshot=True, dry_run=False),
+        )
+
+        assert rc == 0
+        assert not stale.exists(), (
+            "--no-snapshot without --dry-run must still delete dest-only "
+            "entries via a real rsync run"
+        )
+
+    def test_dry_run_never_calls_run_real_sync(
+        self, src_dest, basic_options, monkeypatch
+    ):
+        src, dest = src_dest
+        (dest / "precious.txt").write_text("precious original content")
+
+        def _fail_if_called(cmd):
+            pytest.fail("run_real_sync must not be called on the --dry-run path")
+
+        monkeypatch.setattr("irsync.backup.run_real_sync", _fail_if_called)
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(no_snapshot=True, dry_run=True),
+        )
+        assert rc == 0
+
+
 class TestRunAllBackups:
     """`irsync ALL` treats an unmounted drive as a skip, not a failure."""
 

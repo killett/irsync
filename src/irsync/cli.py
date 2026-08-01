@@ -206,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         RsyncUnavailable,
         FileNotFoundError,
         NotADirectoryError,
+        PermissionError,
         ValueError,
     ) as e:
         logging.error("%s", e)

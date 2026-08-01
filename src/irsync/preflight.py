@@ -210,6 +210,13 @@ def source_root_is_empty(src_root: Path) -> bool:
     Returns:
         True if ``src_root`` does not exist, or exists with no entries
         outside irsync's reserved namespace.
+
+    Raises:
+        PermissionError: If ``src_root`` exists but cannot be listed. An
+            unreadable source is not a proven-non-empty one, so — like
+            :func:`foreign_dest_entries`'s identical stance on the
+            destination side — this fails closed by propagating rather than
+            guessing empty or non-empty.
     """
     try:
         return not _non_reserved_names(src_root)

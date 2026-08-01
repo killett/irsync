@@ -209,6 +209,22 @@ class TestSourceRootIsEmpty:
     def test_missing_source_counts_as_empty(self, tmp_path):
         assert source_root_is_empty(tmp_path / "not_created_yet") is True
 
+    def test_unreadable_source_fails_closed(self, tmp_path):
+        # M1: a PermissionError from _non_reserved_names used to be the only
+        # one of its siblings not caught here, escaping uncaught instead of
+        # failing closed like foreign_dest_entries does on the destination
+        # side. An unreadable source is not a proven-non-empty one, so this
+        # must raise rather than silently guess either way.
+        src = tmp_path / "locked"
+        src.mkdir()
+        (src / "photo.jpg").write_text("data")
+        src.chmod(0o000)
+        try:
+            with pytest.raises(PermissionError):
+                source_root_is_empty(src)
+        finally:
+            src.chmod(0o755)
+
 
 class TestFreshSnapshotIsEmpty:
     def test_root_only_row_is_empty(self):
