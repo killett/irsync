@@ -124,6 +124,7 @@ src/irsync/
   paths.py          # is_rsync_remote, ensure_local_dir, with_trailing_slash
   snapshot.py       # snapshot_tree, write_snapshot, read_snapshot, SNAPSHOT_FILENAME
   statx.py          # ctypes statx(2) wrapper — inode birth time (btime)
+  preflight.py      # mount / empty-source / nonempty-dest / rsync-present guards
   diff.py           # compute_changes, plan_directory_moves (cycle-safe)
   replay.py         # apply_moves — atomic os.rename on the dest tree
   rsync_runner.py   # build_rsync_command, run_dry_run, run_real_sync
