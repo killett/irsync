@@ -173,3 +173,39 @@ Design doc: `docs/superpowers/specs/2026-07-31-mount-safety-design.md`
   and logs/returns identically). Could be factored into a helper alongside
   the existing `_log_lock_conflict`. Not done in this pass — behavior is
   correct, just duplicated.
+
+### Post-review additions (found in the final whole-branch review)
+
+Two behavior gaps surfaced only once the whole branch was read end to end
+against the "what does a cron job actually see" question, after the pass
+above had already closed hazards A–G individually. Both approved by the
+project owner and implemented as follow-up commits on this same branch.
+
+- **An unmounted DESTINATION was a silent ALL success.** `check_mounted`
+  raised one `EndpointNotMounted` for either endpoint, so `run_all_backups`
+  treated "drive `G_backup` isn't mounted" exactly like "drive `H` isn't
+  attached today" — a skip, exit 0. That's correct for a source (most of
+  `Options.all_backups` is unattached on any given day) but wrong for a
+  destination: if `G`'s source is mounted but its backup drive is not, the
+  run backs up nothing and a cron job still reports success. Fixed by
+  `6847e43`: `check_mounted` gained a keyword-only `role` parameter
+  selecting between two new sibling subclasses (`SourceNotMounted`,
+  `DestinationNotMounted`, both still `EndpointNotMounted`), and
+  `run_all_backups` now handles `DestinationNotMounted` exactly like
+  `UnsafeDestination` — counted, batch continues, run exits 1 — instead of
+  folding it into the skip path. See AD-29.
+- **A baseline-less backup from an EMPTY source had no guard of its own.**
+  The destination gate (AD-25) only fires when the *destination* holds
+  foreign entries; an equally-empty destination sailed through, even
+  though "empty source, no baseline" is itself the unmounted/mistyped-
+  source signature that motivated this whole branch (hazard A), independent
+  of what the destination looks like. Fixed by `bad36f6`: a new guard
+  refuses whenever there is no usable baseline and the source is empty —
+  `len(fresh_rows) == 1 and fresh_rows[0]["path"] == "."` for the snapshot
+  path (`snapshot_tree` always includes the root, so `== 0` would never
+  fire), and a direct `source_root_is_empty` filesystem check, sharing
+  `foreign_dest_entries`' reserved-namespace list via a new
+  `_non_reserved_names` helper, for the `--no-snapshot` path. New flag
+  `--allow-empty-source`, one override per guard as usual. Deliberately
+  does not fire when a baseline exists, so a genuine mass-deletion still
+  goes through the existing >50% guard instead of this one. See AD-28.
