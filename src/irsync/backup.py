@@ -17,6 +17,7 @@ from irsync.diff import Changes, compute_changes
 from irsync.options import Endpoints, Options, resolve_endpoints
 from irsync.paths import with_trailing_slash
 from irsync.preflight import (
+    DestinationNotMounted,
     EndpointNotMounted,
     UnsafeDestination,
     check_mounted,
@@ -305,10 +306,16 @@ def run_backup(
         0 on success (or when there was no work to do), non-zero on error.
 
     Raises:
-        EndpointNotMounted: If the source or destination's drive is not
-            mounted and ``args.allow_unmounted`` is not set. Callers that
-            iterate several drives (:func:`run_all_backups`) catch this and
-            treat it as a skip.
+        SourceNotMounted: If the source's drive is not mounted and
+            ``args.allow_unmounted`` is not set. Callers that iterate
+            several drives (:func:`run_all_backups`) catch this and treat
+            it as a skip.
+        DestinationNotMounted: If the destination's drive is not mounted
+            and ``args.allow_unmounted`` is not set. Unlike a missing
+            source drive, :func:`run_all_backups` counts this as a real
+            error, not a skip: the source drive being mounted while its
+            backup drive is not means the run would back up nothing while
+            looking like success.
         UnsafeDestination: If there is no usable snapshot baseline and the
             destination cannot be read to check whether it is empty.
             Callers that iterate several drives (:func:`run_all_backups`)
@@ -341,10 +348,16 @@ def run_backup(
     # creates files on the disk the gate exists to protect.
     try:
         check_mounted(
-            endpoints.source, options.base_dir, gate_outside_base=args.require_mount
+            endpoints.source,
+            options.base_dir,
+            gate_outside_base=args.require_mount,
+            role="source",
         )
         check_mounted(
-            endpoints.dest, options.base_dir, gate_outside_base=args.require_mount
+            endpoints.dest,
+            options.base_dir,
+            gate_outside_base=args.require_mount,
+            role="destination",
         )
     except EndpointNotMounted:
         if not args.allow_unmounted:
@@ -399,7 +412,7 @@ def _run_snapshot_only(
     """Take a snapshot of ``source_arg`` and write it next to the source. No dest.
 
     Raises:
-        EndpointNotMounted: If the source's drive is not mounted and
+        SourceNotMounted: If the source's drive is not mounted and
             ``args.allow_unmounted`` is not set.
     """
     # PermissionError from _source_lock is caught below and turned into
@@ -421,7 +434,9 @@ def _run_snapshot_only(
         src = ensure_local_dir(arg)
 
     try:
-        check_mounted(src, options.base_dir, gate_outside_base=args.require_mount)
+        check_mounted(
+            src, options.base_dir, gate_outside_base=args.require_mount, role="source"
+        )
     except EndpointNotMounted:
         if not args.allow_unmounted:
             raise
@@ -816,16 +831,23 @@ def _page_output(text: str) -> None:
 def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
     """Iterate :data:`Options.all_backups` and back up each in turn.
 
-    Exit-code contract: **a drive that isn't mounted is a skip, not an
-    error.** :data:`Options.all_backups` lists every drive the user might
-    ever attach, and on any given day most of them are absent, so an ALL run
-    that skips them still reports success. Only a real backup failure (a
-    non-zero return from :func:`run_backup`) makes this return 1; a user
-    abort propagates :data:`EXIT_ABORTED` and stops the remaining drives.
-    An unreadable destination (:class:`~irsync.preflight.UnsafeDestination`)
-    is never swallowed as a skip: it is counted as an error, same as a
-    non-zero ``run_backup`` return, and the batch continues to the next
-    drive rather than aborting.
+    Exit-code contract: **an unmounted SOURCE is a skip, not an error; an
+    unmounted DESTINATION is a real error.**
+    :data:`Options.all_backups` lists every drive the user might ever
+    attach, and on any given day most of them are absent, so a source
+    that isn't there is the normal case and an ALL run that skips it still
+    reports success (:class:`~irsync.preflight.SourceNotMounted`, alongside
+    a plain missing directory). A destination that isn't mounted is
+    different: if drive ``G`` is mounted but ``G_backup`` is not, the run
+    would back up nothing while still exiting 0, which is exactly the
+    silent-success hazard this branch exists to close. So
+    :class:`~irsync.preflight.DestinationNotMounted` — like an unreadable
+    destination (:class:`~irsync.preflight.UnsafeDestination`) — is counted
+    as a real error, same as a non-zero ``run_backup`` return, and the
+    batch continues to the next drive rather than aborting. Only a real
+    backup failure or an unmounted/unreadable destination makes this
+    return 1; a user abort propagates :data:`EXIT_ABORTED` and stops the
+    remaining drives.
 
     Both the skipped and the successfully-backed-up entries are named in the
     summary log line so a cron log records what actually happened.
@@ -847,20 +869,30 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
                 options=options,
                 args=args,
             )
-        except (FileNotFoundError, NotADirectoryError, EndpointNotMounted) as e:
-            logging.error("Skipping %r (missing/unmounted drive): %s", backup, e)
-            missing.append(backup)
-            continue
-        except UnsafeDestination as e:
-            # Unlike a missing/unmounted drive, this is not a benign absence —
-            # the destination exists but couldn't be checked for safety. It
-            # counts as a real error (never silently a skip) but does not
-            # abort the batch; the next drive still gets a chance.
+        except (DestinationNotMounted, UnsafeDestination) as e:
+            # Caught BEFORE the (broader) EndpointNotMounted clause below:
+            # DestinationNotMounted is a subclass of it, and a subclass must
+            # be caught before its parent or this handler is dead code.
+            # Unlike a missing/unmounted SOURCE, neither of these is a
+            # benign absence — the run would silently back up nothing (an
+            # unmounted destination) or the destination couldn't be checked
+            # for safety at all (unreadable). Both count as a real error
+            # (never silently a skip) but do not abort the batch; the next
+            # drive still gets a chance.
             logging.error("Error backing up %r: %s", backup, e)
             total_errors += 1
             if total_errors >= options.max_errors:
                 logging.error("Max errors (%d) reached; stopping.", options.max_errors)
                 return 1
+            continue
+        except (FileNotFoundError, NotADirectoryError, EndpointNotMounted) as e:
+            # A bare EndpointNotMounted (not a DestinationNotMounted
+            # instance) and SourceNotMounted both land here, alongside a
+            # plain missing/wrong-type path: all are the benign
+            # "drive absent today" case commit 044c036 established as a
+            # skip, not an error.
+            logging.error("Skipping %r (missing/unmounted drive): %s", backup, e)
+            missing.append(backup)
             continue
         if rc == 0:
             successful.append(backup)

@@ -1662,6 +1662,70 @@ class TestRunAllBackupsUnsafeDestination:
         assert rc == 1, "an unreadable destination must not keep the exit code at 0"
 
 
+class TestRunAllBackupsDestinationMountGate:
+    """An unmounted DESTINATION must fail an ALL run; an unmounted SOURCE must not."""
+
+    def test_unmounted_destination_is_error_and_batch_continues(
+        self, make_tree, basic_options, monkeypatch, caplog
+    ):
+        # Real end-to-end wiring (no mocking of run_backup): drive G's SOURCE
+        # is mounted but its DESTINATION (G_backup) is not. That must be
+        # counted as a real error, not a skip, and must not stop the batch
+        # from reaching H.
+        base = basic_options.base_dir
+        g_src = base / "G"
+        make_tree(g_src, num_files=2, depth=1)
+        g_dest = base / "G_backup"
+        g_dest.mkdir()
+        h_src = base / "H"
+        h_src.mkdir()
+
+        # Only G's source reports as mounted. G's destination and H's source
+        # (a plain unmounted drive) do not.
+        monkeypatch.setattr("os.path.ismount", lambda p: str(p) == str(g_src))
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+        basic_options.all_backups = ["G", "H"]
+
+        with caplog.at_level(logging.INFO):
+            rc = run_all_backups(options=basic_options, args=_args())
+
+        assert rc == 1, "an unmounted destination must not keep the exit code at 0"
+        summary = next(
+            r.getMessage()
+            for r in caplog.records
+            if "missing/skipped" in r.getMessage()
+        )
+        # G is neither successful nor missing: it's a counted error. H, whose
+        # SOURCE is unmounted, is still the benign skip.
+        assert "missing/skipped=1 (H)" in summary
+        assert "errors=1" in summary
+        assert "backed up=0" in summary
+
+    def test_source_unmounted_in_the_same_run_still_keeps_exit_0(
+        self, basic_options, monkeypatch
+    ):
+        # Regression for the skip-is-not-an-error contract (commit 044c036):
+        # this must hold even now that check_mounted distinguishes roles.
+        # Only H is configured here (source unmounted, real check_mounted,
+        # no mocking of run_backup) so this test fails independently of the
+        # destination-side assertions above.
+        base = basic_options.base_dir
+        h_src = base / "H"
+        h_src.mkdir()
+
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+        basic_options.all_backups = ["H"]
+
+        rc = run_all_backups(options=basic_options, args=_args())
+
+        assert rc == 0, "an unmounted SOURCE in an ALL run must still be a skip"
+
+
 class TestFormatSize:
     @pytest.mark.parametrize(
         ("total_bytes", "expected"),

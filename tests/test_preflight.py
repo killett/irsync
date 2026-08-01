@@ -3,8 +3,10 @@
 import pytest
 
 from irsync.preflight import (
+    DestinationNotMounted,
     EndpointNotMounted,
     RsyncUnavailable,
+    SourceNotMounted,
     UnsafeDestination,
     check_mounted,
     check_rsync_available,
@@ -85,6 +87,76 @@ class TestCheckMounted:
         monkeypatch.setattr("os.path.ismount", lambda p: False)
 
         check_mounted(base, base, gate_outside_base=True)
+
+    def test_default_role_raises_source_not_mounted(self, tmp_path, monkeypatch):
+        base = tmp_path / "media" / "u"
+        drive = base / "G"
+        drive.mkdir(parents=True)
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+
+        with pytest.raises(SourceNotMounted):
+            check_mounted(drive, base)
+
+    def test_role_source_raises_source_not_mounted(self, tmp_path, monkeypatch):
+        base = tmp_path / "media" / "u"
+        drive = base / "G"
+        drive.mkdir(parents=True)
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+
+        with pytest.raises(SourceNotMounted):
+            check_mounted(drive, base, role="source")
+
+    def test_role_destination_raises_destination_not_mounted(
+        self, tmp_path, monkeypatch
+    ):
+        base = tmp_path / "media" / "u"
+        drive = base / "G_backup"
+        drive.mkdir(parents=True)
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+
+        with pytest.raises(DestinationNotMounted):
+            check_mounted(drive, base, role="destination")
+
+    def test_source_not_mounted_is_also_endpoint_not_mounted(
+        self, tmp_path, monkeypatch
+    ):
+        # Existing `except EndpointNotMounted` call sites (cli.main,
+        # run_backup's --allow-unmounted handler) must keep working.
+        base = tmp_path / "media" / "u"
+        drive = base / "G"
+        drive.mkdir(parents=True)
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+
+        with pytest.raises(EndpointNotMounted):
+            check_mounted(drive, base, role="source")
+
+    def test_destination_not_mounted_is_also_endpoint_not_mounted(
+        self, tmp_path, monkeypatch
+    ):
+        base = tmp_path / "media" / "u"
+        drive = base / "G_backup"
+        drive.mkdir(parents=True)
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+
+        with pytest.raises(EndpointNotMounted):
+            check_mounted(drive, base, role="destination")
+
+    def test_destination_not_mounted_is_not_a_source_not_mounted(
+        self, tmp_path, monkeypatch
+    ):
+        # The two roles are siblings, not parent/child of each other: a
+        # handler that specifically wants SourceNotMounted must not
+        # accidentally also catch a DestinationNotMounted.
+        base = tmp_path / "media" / "u"
+        drive = base / "G_backup"
+        drive.mkdir(parents=True)
+        monkeypatch.setattr("os.path.ismount", lambda p: False)
+
+        with pytest.raises(DestinationNotMounted):
+            try:
+                check_mounted(drive, base, role="destination")
+            except SourceNotMounted:
+                pytest.fail("DestinationNotMounted must not be a SourceNotMounted")
 
 
 class TestForeignDestEntries:

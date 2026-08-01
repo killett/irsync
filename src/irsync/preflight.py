@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from irsync.snapshot import Row
@@ -21,8 +21,30 @@ if TYPE_CHECKING:
 class EndpointNotMounted(Exception):
     """An endpoint that should live on its own filesystem is not mounted.
 
-    Callers that iterate several drives (``run_all_backups``) treat this the
-    same as a missing drive: a skip, not an error.
+    Base class for :class:`SourceNotMounted` and
+    :class:`DestinationNotMounted`. Existing code that catches this base
+    class (``cli.main``'s refusal boundary, the ``--allow-unmounted``
+    handler in ``run_backup``) keeps working unchanged, since both
+    subclasses are also instances of this type.
+    """
+
+
+class SourceNotMounted(EndpointNotMounted):
+    """The source endpoint's drive is not mounted.
+
+    ``run_all_backups`` treats this the same as a missing drive: a skip,
+    not an error. ``Options.all_backups`` lists every drive the user might
+    ever attach, and on any given day most of them are absent, so a source
+    that isn't there is the normal case, not a failure.
+    """
+
+
+class DestinationNotMounted(EndpointNotMounted):
+    """The destination endpoint's drive is not mounted.
+
+    Unlike :class:`SourceNotMounted`, ``run_all_backups`` counts this as a
+    real error, not a skip: if the source drive IS mounted but its backup
+    drive is not, the run would back up nothing while looking like success.
     """
 
 
@@ -64,8 +86,9 @@ def check_mounted(
     base_dir: Path,
     *,
     gate_outside_base: bool = False,
+    role: Literal["source", "destination"] = "source",
 ) -> None:
-    """Raise :class:`EndpointNotMounted` unless ``endpoint``'s drive is mounted.
+    """Raise a not-mounted error unless ``endpoint``'s drive is mounted.
 
     Args:
         endpoint: A resolved local path, or a string for an rsync remote.
@@ -75,9 +98,16 @@ def check_mounted(
             themselves be mountpoints (the ``--require-mount`` opt-in). However,
             ``base_dir`` itself is always exempt — it is by definition the
             ordinary directory that contains mountpoints, never a mountpoint.
+        role: Either ``"source"`` or ``"destination"``, selecting which
+            exception subclass is raised so callers (``run_all_backups``)
+            can tell the two apart: an unmounted source is a skip, an
+            unmounted destination is a real error.
 
     Raises:
-        EndpointNotMounted: If the gate path is not a mountpoint.
+        SourceNotMounted: If ``role="source"`` and the gate path is not a
+            mountpoint.
+        DestinationNotMounted: If ``role="destination"`` and the gate path
+            is not a mountpoint.
     """
     if not isinstance(endpoint, Path):
         return
@@ -89,10 +119,13 @@ def check_mounted(
             return
         gate = endpoint
     if not os.path.ismount(gate):
-        raise EndpointNotMounted(
+        message = (
             f"{gate} is not a mountpoint, so {endpoint} is not the drive it "
             "appears to be. The drive is probably not mounted."
         )
+        if role == "destination":
+            raise DestinationNotMounted(message)
+        raise SourceNotMounted(message)
 
 
 def _non_reserved_names(root: Path) -> list[str]:

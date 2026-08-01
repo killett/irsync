@@ -97,11 +97,17 @@ Each flag disarms exactly one guard, so a cron line cannot silently lose a
 protection it did not name. If a refusal fires on a drive you expect to be
 attached, check that it is actually mounted before reaching for a flag.
 
-An `ALL` run treats a drive that isn't mounted as a **skip, not an error**: the
+An `ALL` run treats an unmounted **source** as a **skip, not an error**: the
 configured list names every drive you might ever attach, so missing ones are
-expected. Such a run still exits 0, naming both the skipped and the
-successfully backed-up drives in its summary. A non-zero exit from `ALL` means
-a backup actually failed (1) or you aborted at the prompt (130).
+expected. An unmounted **destination** is different and counts as a real
+**error**: if the source drive is mounted but its backup drive is not, the
+run would back up nothing while still looking like success, which is exactly
+what this guard exists to prevent. Either way the batch continues to the next
+drive rather than stopping. A run with only skips still exits 0, naming both
+the skipped and the successfully backed-up drives in its summary; a run with
+at least one unmounted destination (or any other real error) exits 1. A
+non-zero exit from `ALL` means a backup actually failed (1) or you aborted at
+the prompt (130).
 
 ## Project structure
 

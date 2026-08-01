@@ -443,6 +443,25 @@ through the existing >50% guard (AD-6) — deliberately not through this one,
 to avoid two guards firing on the same event. Override: `--allow-empty-source`,
 one flag for this guard alone (AD-26's one-override-per-guard rule).
 
+### 29. `check_mounted` takes a `role`; an unmounted destination is an ALL error, not a skip
+
+`EndpointNotMounted` (AD-24) was one type for both endpoints, so
+`run_all_backups` could not tell "source absent" (expected — most of
+`Options.all_backups` is unattached on any given day) from "destination
+absent" (never expected: it means the run would back up nothing while still
+looking like success). `check_mounted` gained a keyword-only `role:
+Literal["source", "destination"]` (default `"source"`) that selects between
+two new sibling subclasses, `SourceNotMounted` and `DestinationNotMounted`,
+both still `EndpointNotMounted` so every existing `except EndpointNotMounted`
+site (`cli.main`, `run_backup`'s `--allow-unmounted` handler) keeps working
+unchanged. `run_all_backups` catches `(DestinationNotMounted,
+UnsafeDestination)` **before** the broader `(FileNotFoundError,
+NotADirectoryError, EndpointNotMounted)` clause — required ordering, since a
+subclass caught after its parent is dead code — and handles it exactly like
+`UnsafeDestination` (AD-25): counted in `total_errors`, batch continues, run
+exits 1. Single-drive runs are unaffected: both subclasses still reach
+`cli.main`'s refusal boundary as exit 2.
+
 ## Appendix A — bug catalog
 
 28 bugs fixed across 10 review passes (passes 1-8 plus pass 10; pass 9 was
