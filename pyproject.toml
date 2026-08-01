@@ -43,6 +43,15 @@ path = "src/irsync/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/irsync"]
 
+[tool.ruff]
+# Narrative documents, not source. Newer ruff formats Python code blocks
+# inside markdown, and the design docs and implementation plans under docs/
+# deliberately contain illustrative fragments that are not standalone-valid
+# Python (indented dict entries shown for insertion into an existing helper,
+# for example). Formatting those is wrong, and it made CI disagree with the
+# local gate purely because the two run different ruff versions.
+extend-exclude = ["docs"]
+
 [tool.ruff.lint]
 select = [
     "F",      # Pyflakes — unused imports, undefined names, etc.
