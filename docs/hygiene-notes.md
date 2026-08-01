@@ -168,12 +168,12 @@ Design doc: `docs/superpowers/specs/2026-07-31-mount-safety-design.md`
   report it. The empty-source guard just above it (`backup.py:640`) has no
   such carve-out and runs first, so it still pre-empts the destination
   gate's dry-run exemption whenever the source itself is empty; see AD-28.
-- **The `PermissionError` log-and-return block is duplicated verbatim**
-  between `run_backup` and `_run_snapshot_only` in `src/irsync/backup.py`
-  (each catches a read-only source root around its own `_source_lock` call
-  and logs/returns identically). Could be factored into a helper alongside
-  the existing `_log_lock_conflict`. Not done in this pass — behavior is
-  correct, just duplicated.
+- ~~**The `PermissionError` log-and-return block is duplicated verbatim**
+  between `run_backup` and `_run_snapshot_only` in `src/irsync/backup.py`.~~
+  **Resolved.** It was factored into `_log_source_permission_error`
+  alongside the existing `_log_lock_conflict`; both call sites in
+  `run_backup` and both in `_run_snapshot_only` now use it. Corrected here
+  in the 2026-08-01 pass, which found the bullet still claiming otherwise.
 
 ### Post-review additions (found in the final whole-branch review)
 
