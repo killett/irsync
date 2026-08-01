@@ -10,12 +10,26 @@ from irsync.snapshot import (
     SNAPSHOT_FILENAME,
     SNAPSHOT_TEMPFILE_PREFIX,
     SnapshotMismatch,
-    read_jsonl,
     read_snapshot,
     snapshot_tree,
-    write_jsonl,
     write_snapshot,
 )
+
+
+def _write_headerless(rows, out):
+    """Write rows as bare JSONL with no provenance header.
+
+    irsync stopped *writing* this format when the header landed (H3), but
+    ``read_snapshot`` still has to *read* it — a user upgrading across that
+    change has one on disk. Producing the legacy format is therefore a test
+    concern, not a product one, which is why this lives here rather than in
+    ``irsync.snapshot``. Mirrors the writer's encoding so surrogate paths
+    round-trip identically.
+    """
+    with out.open("w", encoding="utf-8", errors="surrogateescape", newline="\n") as f:
+        for r in rows:
+            f.write(json.dumps(r, separators=(",", ":"), ensure_ascii=False))
+            f.write("\n")
 
 
 def _build_tree(root):
@@ -126,48 +140,34 @@ class TestSnapshotTree:
 
 
 class TestWriteReadRoundtrip:
-    def test_roundtrip(self, tmp_path):
-        _build_tree(tmp_path)
-        rows = snapshot_tree(tmp_path)
-        out = tmp_path.parent / "snap.jsonl"
-        write_jsonl(rows, out)
-        loaded = read_jsonl(out)
-        assert loaded == rows
-
     def test_jsonl_format_one_per_line(self, tmp_path):
         _build_tree(tmp_path)
         rows = snapshot_tree(tmp_path)
         out = tmp_path.parent / "snap.jsonl"
-        write_jsonl(rows, out)
+        write_snapshot(rows, source_root=tmp_path, out_file=out)
         lines = out.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == len(rows)
-        for line in lines:
+        # One provenance header line, then exactly one object per row: a
+        # writer that emitted a JSON array, or pretty-printed, would break
+        # the streaming line-by-line reader (10th-F4).
+        assert len(lines) == len(rows) + 1
+        for line in lines[1:]:
             obj = json.loads(line)
             assert "ino" in obj
 
     def test_read_rejects_missing_keys(self, tmp_path):
+        # Exercised through the headerless branch, where the first line is
+        # itself a row and so goes straight through _validate_row.
         out = tmp_path / "bad.jsonl"
         out.write_text('{"dev":1,"ino":2}\n', encoding="utf-8")
         with pytest.raises(SystemExit):
-            read_jsonl(out)
-
-    def test_7th_m2_read_jsonl_rejects_invalid_type_value(self, tmp_path):
-        # 7th-M2: a corrupted snapshot row with an unknown type ("x", "")
-        # was silently appended; later compute_changes filtered it out via
-        # the type whitelist, hiding the corruption. read_jsonl must reject
-        # it up front so a corrupted snapshot file can't cause silent
-        # invisibility of inodes during the diff.
-        out = tmp_path / "bad_type.jsonl"
-        out.write_text(
-            '{"dev":1,"ino":2,"type":"x","nlink":1,"size":0,"path":"a"}\n',
-            encoding="utf-8",
-        )
-        with pytest.raises(SystemExit):
-            read_jsonl(out)
+            read_snapshot(out, expected_source_root=tmp_path)
 
     def test_7th_m2_read_snapshot_rejects_invalid_type_value(self, tmp_path):
-        # Same defense as the read_jsonl variant, but for the headered
-        # read_snapshot path that the orchestrator actually uses.
+        # 7th-M2: a corrupted snapshot row with an unknown type ("x", "")
+        # was silently appended; later compute_changes filtered it out via
+        # the type whitelist, hiding the corruption. read_snapshot must
+        # reject it up front so a corrupted snapshot file can't cause
+        # silent invisibility of inodes during the diff.
         out = tmp_path / "bad_type.jsonl"
         header_line = (
             '{"_meta":{"source_root":"' + str(tmp_path.resolve()) + '",'
@@ -198,9 +198,9 @@ class TestBtimeField:
     def test_5th_h1_legacy_snapshot_without_btime_reads_back_with_sentinel(
         self, tmp_path
     ):
-        # Snapshots written before this change have no btime_ns. read_jsonl
-        # must default missing field to -1 so compute_moves falls back to
-        # the size+mtime-only gate (no NFS defense for these legacy
+        # Snapshots written before this change have no btime_ns. The reader
+        # must default the missing field to -1 so compute_moves falls back
+        # to the size+mtime-only gate (no NFS defense for these legacy
         # snapshots, but no rename-optimization regression either).
         out = tmp_path / "legacy.jsonl"
         # Legacy row: dev/ino/type/nlink/size/mtime_ns/path, NO btime_ns.
@@ -209,7 +209,7 @@ class TestBtimeField:
             '"mtime_ns":1000,"path":"x.txt"}\n'
         )
         out.write_text(legacy_rows, encoding="utf-8")
-        rows = read_jsonl(out)
+        _header, rows = read_snapshot(out, expected_source_root=tmp_path)
         assert rows[0]["btime_ns"] == -1
 
 
@@ -361,14 +361,17 @@ class TestF1NonUtf8Filenames:
         assert loaded_paths == original_paths
         assert "\udcff\udcfe.bin" in loaded_paths
 
-    def test_10th_f1_write_jsonl_round_trips_surrogate_path(self, tmp_path):
-        # Legacy headerless writer must also handle the encoding cleanly.
+    def test_10th_f1_headerless_read_round_trips_surrogate_path(self, tmp_path):
+        # The legacy headerless format must decode surrogate paths too: a
+        # reader that dropped errors="surrogateescape" would raise
+        # UnicodeDecodeError on an upgrade-era snapshot instead of reading it.
         self._make_byte_named_file(tmp_path, b"\xff\xfe.bin")
         rows = snapshot_tree(tmp_path)
         out = tmp_path.parent / "legacy.jsonl"
-        write_jsonl(rows, out)
-        loaded = read_jsonl(out)
+        _write_headerless(rows, out)
+        _header, loaded = read_snapshot(out, expected_source_root=tmp_path)
         assert loaded == rows
+        assert "\udcff\udcfe.bin" in {r["path"] for r in loaded}
 
 
 class TestProvenanceHeader:
@@ -410,7 +413,7 @@ class TestProvenanceHeader:
         _build_tree(tmp_path)
         rows = snapshot_tree(tmp_path)
         out = tmp_path.parent / "legacy.jsonl"
-        write_jsonl(rows, out)  # no header
+        _write_headerless(rows, out)
         header, loaded = read_snapshot(out, expected_source_root=tmp_path)
         assert header is None
         assert loaded == rows

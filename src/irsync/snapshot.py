@@ -202,28 +202,6 @@ def snapshot_tree(
     return rows
 
 
-def write_jsonl(rows: Iterable[Row], out_file: Path) -> None:
-    """Write ``rows`` as JSONL (one JSON object per line) to ``out_file``.
-
-    Args:
-        rows: Iterable of :class:`Row` records.
-        out_file: Destination path; parents must already exist.
-
-    Raises:
-        OSError: If the file cannot be written.
-    """
-    # 10th-F1: errors="surrogateescape" lets paths containing arbitrary
-    # non-UTF-8 bytes (legal on Linux, surfaced by os.listdir as surrogate
-    # codepoints) round-trip the file boundary instead of raising
-    # UnicodeEncodeError mid-snapshot.
-    with out_file.open(
-        "w", encoding="utf-8", errors="surrogateescape", newline="\n"
-    ) as f:
-        for r in rows:
-            f.write(json.dumps(r, separators=(",", ":"), ensure_ascii=False))
-            f.write("\n")
-
-
 def write_snapshot(
     rows: Iterable[Row],
     *,
@@ -248,7 +226,10 @@ def write_snapshot(
             created_at_utc=dt.datetime.now(dt.UTC).isoformat(),
         )
     }
-    # 10th-F1: see write_jsonl — same surrogateescape rationale.
+    # 10th-F1: errors="surrogateescape" lets paths containing arbitrary
+    # non-UTF-8 bytes (legal on Linux, surfaced by os.listdir as surrogate
+    # codepoints) round-trip the file boundary instead of raising
+    # UnicodeEncodeError mid-snapshot.
     with out_file.open(
         "w", encoding="utf-8", errors="surrogateescape", newline="\n"
     ) as f:
@@ -341,9 +322,9 @@ def read_snapshot(
 def _validate_row(obj: dict[str, object], file: Path, lineno: int) -> Row:
     """Validate a parsed row dict and apply legacy-snapshot defaults.
 
-    Shared between :func:`read_snapshot` (10th-F4 streaming refactor) and
-    :func:`read_jsonl`. Raises :class:`SystemExit` with a precise location
-    on missing keys or an invalid type tag (7th-M2).
+    Applied to every row :func:`read_snapshot` parses, headered or legacy
+    headerless. Raises :class:`SystemExit` with a precise location on
+    missing keys or an invalid type tag (7th-M2).
     """
     for k in ("dev", "ino", "type", "nlink", "size", "path"):
         if k not in obj:
@@ -363,32 +344,3 @@ def _validate_row(obj: dict[str, object], file: Path, lineno: int) -> Row:
     obj.setdefault("mtime_ns", -1)
     obj.setdefault("btime_ns", -1)
     return obj  # type: ignore[return-value]
-
-
-def read_jsonl(file: Path) -> list[Row]:
-    """Read a JSONL file produced by :func:`write_jsonl` back into rows.
-
-    Args:
-        file: JSONL file to read.
-
-    Returns:
-        A list of :class:`Row` records.
-
-    Raises:
-        SystemExit: If a row is malformed or missing required keys.
-        FileNotFoundError: If ``file`` does not exist.
-    """
-    out: list[Row] = []
-    # 10th-F1: see write_jsonl — surrogateescape on read so non-UTF-8
-    # bytes in legacy snapshots also round-trip cleanly.
-    with file.open("r", encoding="utf-8", errors="surrogateescape") as f:
-        for ln, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError as e:
-                raise SystemExit(f"Malformed JSONL at {file}:{ln}: {e}") from e
-            out.append(_validate_row(obj, file, ln))
-    return out

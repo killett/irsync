@@ -55,11 +55,11 @@ secretly waking the backup drive on every run.
 | `cli.py` | argparse; mirrors srsync's flags plus `--force`, `--no-snapshot`, `--snapshot-only`, `--dry-run`; rejects `--force` + `--no-snapshot` at parse time |
 | `options.py` | `Options` dataclass (drive-letter map, `base_dir`, `exclude_dirs`); `resolve_endpoints` maps raw CLI args to `(src, dest, remote flags)` |
 | `paths.py` | `is_rsync_remote`, `ensure_local_dir`, `with_trailing_slash` |
-| `snapshot.py` | `snapshot_tree` (iterative walk, `lstat`-based, xdev-aware); `Row` TypedDict `(dev, ino, type, nlink, size, mtime_ns, btime_ns, path)`; `write_snapshot`/`read_snapshot` (provenance header + type validation, streaming read, `surrogateescape` encoding); legacy `write_jsonl`/`read_jsonl` (no header, same validator); shared `_validate_row` helper; reserved-namespace constants `SNAPSHOT_FILENAME = ".irsync_snapshot.jsonl"`, `LOCKFILE_NAME = ".irsync.lock"`, `SNAPSHOT_TEMPFILE_PREFIX = ".irsync-snap-"` |
+| `snapshot.py` | `snapshot_tree` (iterative walk, `lstat`-based, xdev-aware); `Row` TypedDict `(dev, ino, type, nlink, size, mtime_ns, btime_ns, path)`; `write_snapshot`/`read_snapshot` (provenance header + type validation, streaming read, `surrogateescape` encoding; `read_snapshot` still parses the legacy headerless format, whose writer `write_jsonl` and reader `read_jsonl` were removed unused in the 2026-08-01 hygiene pass); shared `_validate_row` helper; reserved-namespace constants `SNAPSHOT_FILENAME = ".irsync_snapshot.jsonl"`, `LOCKFILE_NAME = ".irsync.lock"`, `SNAPSHOT_TEMPFILE_PREFIX = ".irsync-snap-"` |
 | `statx.py` | ctypes wrapper around Linux `statx(2)` for `btime_ns`; returns `-1` when unavailable (non-Linux, no statx, FS without btime, dangling path) so the caller falls back to the size+mtime gate |
 | `diff.py` | `NodeInfo`, `index_by_inode`, `compute_moves` (returns `(dir_moves, file_moves, consumed_keys)`), `prune_redundant_dir_moves`, `plan_directory_moves` (cycle-safe via random temp suffix), `Changes` dataclass `(dir_moves, file_moves, modified, created, deleted)`, `compute_changes` (public API). Move gate: require size + `mtime_ns` match; if both sides have `btime_ns >= 0`, also require `btime_ns` match. `created`/`deleted` filter includes types `l` and `o`; type-change at same path is emitted as both deleted+created |
 | `replay.py` | `apply_moves(dir_moves, file_moves, dest_root) -> ReplayResult`; pure `os.rename`, no-clobber guard, refuses EXDEV; `CrossDeviceMoveError` + `_preflight_check_xdev` stats every planned src/dst path against `dest_root.st_dev` before any rename runs |
-| `rsync_runner.py` | `build_rsync_command` (anchored excludes for the three reserved-namespace files), `parse_rsync_output`, `run_dry_run`, `run_real_sync` (streams stderr live; `start_new_session=True`; routes cancellation through `os.killpg(getpgid(pid), SIGTERM/SIGKILL)` so ssh children die with rsync; installs a scoped SIGTERM handler that raises `KeyboardInterrupt` so cleanup fires on cron timeout) |
+| `rsync_runner.py` | `build_rsync_command` (anchored excludes for the three reserved-namespace files), `run_dry_run`, `run_real_sync` (streams stderr live; `start_new_session=True`; routes cancellation through `os.killpg(getpgid(pid), SIGTERM/SIGKILL)` so ssh children die with rsync; installs a scoped SIGTERM handler that raises `KeyboardInterrupt` so cleanup fires on cron timeout) |
 | `backup.py` | Orchestrator: `run_backup` resolves endpoints, acquires `_source_lock`, dispatches `_run_backup_for_endpoints` / `_run_snapshot_only` / `_run_rsync_only`. Also `_atomic_write_snapshot` (fsyncs tempfile before `os.replace`), `_persist_snapshots` (dest first, then src — AD-15), `_format_preview`, `_show_preview`, `_confirm_or_abort`, `_cleanup_orphan_tempfiles` (scans both src and dest; dest call deferred until `apply_moves` — AD-22), `_page_output` (`less` with `start_new_session=True`), `run_all_backups`. Catches `CrossDeviceMoveError` around `apply_moves`; `_run_rsync_only` always runs the dry-run so `--no-snapshot --yes` prints to stdout for cron auditability |
 
 ### `tests/`
@@ -131,12 +131,13 @@ On read, `read_snapshot` validates that `source_root` matches the current source
 root. If it does not (user copied a snapshot from another tree, restored from
 elsewhere, or mounted the drive at a different point), `SnapshotMismatch` is
 raised and the orchestrator treats the run as a first backup — a line of defense
-against using the wrong baseline. `read_snapshot`/`read_jsonl` also validate that
+against using the wrong baseline. `read_snapshot` also validates that
 each row's `type` is one of `("f", "d", "l", "o")`; a corrupted row with an
 unknown type hard-fails the read instead of being silently dropped. Validation
-lives in a shared `_validate_row(obj, file, lineno)` helper used by both readers,
-which stream line by line and report **actual file line numbers** so
-`sed -n <N>p <file>` lands on the bad row.
+lives in a `_validate_row(obj, file, lineno)` helper applied to every row on
+both the headered and the legacy headerless branch; the reader streams line by
+line and reports **actual file line numbers** so `sed -n <N>p <file>` lands on
+the bad row.
 
 ### 5. Reserved-namespace pattern at the source root
 
@@ -327,9 +328,11 @@ Linux filenames are arbitrary byte sequences (any byte except `/` and `\0`).
 Python strs (codepoints `\udc80–\udcff`). Without `errors="surrogateescape"` on
 the writer's `open()`, `f.write(...)` of any path containing such a surrogate
 raises `UnicodeEncodeError` mid-snapshot — the user can't even baseline a tree
-containing arbitrary-byte names. All four file `open()`s in `snapshot.py`
-(`write_jsonl`, `write_snapshot`, `read_snapshot`, `read_jsonl`) now pass
-`errors="surrogateescape"`, round-tripping arbitrary bytes losslessly.
+containing arbitrary-byte names. Every file `open()` in `snapshot.py`
+(`write_snapshot` and `read_snapshot`; also the `write_jsonl`/`read_jsonl` pair
+that this pass added it to and the 2026-08-01 hygiene pass later removed as
+unused) passes `errors="surrogateescape"`, round-tripping arbitrary bytes
+losslessly.
 `json.dumps`/`json.loads` operate at the str level and accept lone surrogates.
 The provenance header's `source_root` field goes through the same encoder, so
 non-UTF-8 source-root paths also round-trip.
