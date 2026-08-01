@@ -2,7 +2,7 @@ import io
 
 import pytest
 
-from irsync.rsync_runner import build_rsync_command, parse_rsync_output, run_real_sync
+from irsync.rsync_runner import build_rsync_command, run_real_sync
 
 
 class TestBuildRsyncCommand:
@@ -353,16 +353,3 @@ class TestRunRealSyncIsolation:
             "interrupted, so it can't continue writing to dest after the "
             "parent has aborted"
         )
-
-
-class TestParseRsyncOutput:
-    def test_extracts_count_and_size(self):
-        sample = "Number of files: 1,234\ntotal size is 567,890,123 bytes\n"
-        n, sz = parse_rsync_output(sample)
-        assert n == 1234
-        assert sz is not None and "567" in sz
-
-    def test_returns_none_when_absent(self):
-        n, sz = parse_rsync_output("nothing useful here")
-        assert n is None
-        assert sz is None

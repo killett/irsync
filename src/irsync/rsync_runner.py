@@ -6,7 +6,6 @@ import contextlib
 import datetime as dt
 import logging
 import os
-import re
 import shlex
 import signal
 import subprocess  # noqa: S404 — invoking rsync is the whole point of this module
@@ -19,9 +18,6 @@ from irsync.snapshot import (
     SNAPSHOT_FILENAME,
     SNAPSHOT_TEMPFILE_PREFIX,
 )
-
-_FILES_RE = re.compile(r"Number of files:\s+([\d,]+)")
-_SIZE_RE = re.compile(r"(?:total size is|Total file size:)\s+([^\s]+)")
 
 
 def build_rsync_command(
@@ -94,24 +90,6 @@ def build_rsync_command(
 
     cmd.extend([source, dest])
     return cmd
-
-
-def parse_rsync_output(output: str) -> tuple[int | None, str | None]:
-    """Extract the file count and total size from rsync's ``--stats`` output.
-
-    Args:
-        output: Captured stdout text from a ``--stats`` rsync run.
-
-    Returns:
-        ``(file_count, total_size)``; either may be ``None`` if not present.
-    """
-    m_files = _FILES_RE.search(output)
-    m_total = _SIZE_RE.search(output)
-    file_count: int | None = None
-    if m_files:
-        file_count = int(m_files.group(1).replace(",", ""))
-    total_size = m_total.group(1) if m_total else None
-    return file_count, total_size
 
 
 def run_dry_run(cmd: list[str]) -> str:
