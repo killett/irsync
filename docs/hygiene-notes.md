@@ -224,7 +224,8 @@ reported `rsync completed successfully` and exit 0.
 
 **Pre-existing, not introduced by this branch.** It survived unnoticed
 because every other reproduction in this pass used the snapshot path, where
-`--dry-run` was already honored correctly (`backup.py:696`); `--no-snapshot`
+`--dry-run` was already honored correctly (the `if args.dry_run:` block in
+`_run_backup_for_endpoints`); `--no-snapshot`
 is comparatively rarely exercised end to end (see "11th-pass dimensions" in
 `PROGRESS.md`).
 

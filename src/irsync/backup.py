@@ -812,8 +812,8 @@ def _run_rsync_only(
     # despite the flag. The dry-run preview above already IS rsync's
     # --dry-run output, so honoring the flag here is just: stop before the
     # real transfer and report success, changing nothing — the same
-    # contract the snapshot path applies at its own --dry-run check
-    # (backup.py:696).
+    # contract the snapshot path applies at its own `if args.dry_run:`
+    # check in _run_backup_for_endpoints.
     if args.dry_run:
         return 0
 

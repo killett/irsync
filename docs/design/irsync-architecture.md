@@ -474,7 +474,8 @@ introduced by this branch: it built a dry-run command for the preview and
 then unconditionally built a second, real (`dry_run=False`) command and
 called `run_real_sync` — `args.dry_run` was never consulted, so
 `--no-snapshot --dry-run` ran a real `rsync --delete-before`. The snapshot
-path already got this right at its own `--dry-run` check (`backup.py:696`):
+path already got this right at its own `--dry-run` check (the
+`if args.dry_run:` block in `_run_backup_for_endpoints`):
 show the preview, confirm, then return 0 without touching dest or
 persisting a snapshot. `_run_rsync_only` now checks `args.dry_run` right
 after showing the same preview (which, on this path,
