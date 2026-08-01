@@ -273,3 +273,95 @@ the test if it is called at all during a dry run.
   gate's carve-out whenever the source is empty. Added to AD-28: a dry-run
   preview of an empty source is a wall of deletions that conveys less than
   the refusal message does.
+
+## 2026-08-01 — whole-repo audit (mutation opted into for docs + dead code)
+
+Baseline before any edit: `ruff check .` clean, `ruff format --check .` clean,
+`mypy .` clean, `256 passed, 1 skipped`. After: same three clean,
+`252 passed, 1 skipped` — four tests removed with the code they were the only
+callers of (two for `parse_rsync_output`, two that duplicated a `read_snapshot`
+equivalent). No behavior change to any irsync invocation.
+
+Scope was whole-repo, which defaults to audit-only; the project owner opted in
+to mutation for the documentation fixes and to deleting the dead public helpers.
+
+### Applied
+
+- `a815995` `docs: list preflight.py in the README project structure` — the
+  module holding every refusal guard was the only one missing from the listing.
+- `75427c7` `docs: anchor the dry-run cross-reference to a symbol, not a line
+  number` — three copies pointed at `backup.py:696`; the check had moved to 703.
+  Now they name the `if args.dry_run:` block in `_run_backup_for_endpoints`, so
+  editing above it can't invalidate the pointer again. **Prefer symbol
+  references to line references in this repo** — this is the second pass to
+  find a drifted one.
+- `6b1ef5a` `docs: mark the duplicated-PermissionError gap as resolved` — the
+  2026-07-31 coverage-gap bullet still said the `PermissionError`
+  log-and-return block was duplicated between `run_backup` and
+  `_run_snapshot_only` and proposed factoring it out.
+  `_log_source_permission_error` already does exactly that.
+- `cef7fae` `refactor: remove the unused parse_rsync_output helper` — plus its
+  two regexes, the `re` import, and its two tests.
+- `4d4f0f0` `refactor: remove the unused legacy JSONL writer and reader` —
+  `write_jsonl`/`read_jsonl`, superseded by `write_snapshot`/`read_snapshot`.
+
+### Deleting dead code without deleting coverage
+
+`read_snapshot` still parses the **legacy headerless format** that
+`write_jsonl` used to write — a user upgrading across the provenance-header
+change has one on disk. So the tests were triaged rather than deleted with the
+functions: the two that only duplicated a `read_snapshot` equivalent went, and
+the four covering surviving behavior (missing-key rejection, legacy
+btime-sentinel default, `header is None` on a headerless file, surrogate-path
+round-trip) were ported to `read_snapshot`. Producing a headerless file is now
+`_write_headerless` in `test_snapshot.py`: an input format the product must
+still *read* but no longer *writes* belongs in the test scaffolding, not in
+`irsync.snapshot`.
+
+Generalizable: "delete the function and its tests" is the wrong default
+whenever a *surviving* code path shares the deleted function's behavior. Check
+what the tests actually pin down before removing them.
+
+### Deliberately kept
+
+- **`statx.is_available()` still has no callers** and is now the only such
+  symbol left, which reads as inconsistent with the two removals above. It
+  isn't: unlike `parse_rsync_output` (a parser for output irsync prints
+  verbatim) and `write_jsonl` (a writer for a format irsync stopped writing),
+  `is_available` is a *probe for a runtime capability the diff already depends
+  on* — the natural implementation of a "your filesystem doesn't report btime,
+  so rename detection is degraded" diagnostic, which is an open item in
+  `PROGRESS.md`. Kept for that, not for API-compatibility reasons.
+
+- **`_run_snapshot_only` and the `args.snapshot_only` branch of
+  `_run_backup_for_endpoints` duplicate the snapshot-write sequence**
+  (`snapshot_tree` → `_atomic_write_snapshot` → an identical
+  `"Snapshot-only: wrote %d rows to %s"` log). This is a real DRY violation —
+  one decision, two copies, they will change together — not mere textual
+  similarity. Not merged in this pass: the two arrive with different
+  invariants already established (the second has taken the lock and run
+  `_cleanup_orphan_tempfiles`; the first has neither, and has no destination
+  at all), so a shared helper has to take those as parameters and the merge
+  stops being behavior-obvious. Worth doing deliberately, with tests, not as a
+  hygiene drive-by.
+
+- **`_run_snapshot_only` re-implements the drive-letter / `~` / `mypython`
+  shorthand** that `resolve_endpoints` owns (`options.py`). Two places to edit
+  to add a shortcut. Flagged, not merged: `resolve_endpoints` is built around
+  producing a source *and* a destination, and `--snapshot-only` has no
+  destination — the honest fix is extracting a shorthand-resolution function
+  both call, which is a design change rather than a cleanup.
+
+### Environment observations
+
+- **`cli.py` reports 13% coverage; this is an artifact, not a gap.**
+  `tests/test_cli.py` drives the CLI through `subprocess.run`, so the child
+  process isn't instrumented and none of `_build_parser`/`main` is counted,
+  despite ten real end-to-end tests. Whole-repo total is 87%. Fixing the number
+  needs `coverage`'s subprocess support (`COVERAGE_PROCESS_START` plus
+  `--parallel` and a combine step); do not "fix" it by converting those tests
+  to in-process calls, since running the actual installed entry point is the
+  point of them.
+
+- The uncommitted `pixi.toml` / `pixi.lock` dependency additions noted in the
+  2026-07-30 entry are still present and still untouched.
