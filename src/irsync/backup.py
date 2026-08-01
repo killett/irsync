@@ -22,6 +22,8 @@ from irsync.preflight import (
     check_mounted,
     check_rsync_available,
     foreign_dest_entries,
+    fresh_snapshot_is_empty,
+    source_root_is_empty,
 )
 from irsync.replay import CrossDeviceMoveError, apply_moves
 from irsync.rsync_runner import build_rsync_command, run_dry_run, run_real_sync
@@ -537,6 +539,22 @@ def _run_backup_for_endpoints(
     if args.no_snapshot or src_root is None:
         if src_root is None:
             logging.warning("Source is remote; inode rename detection disabled.")
+        elif args.no_snapshot and not args.allow_empty_source:
+            # --no-snapshot never walks the tree, so there is no fresh_rows
+            # for fresh_snapshot_is_empty to inspect (that check covers the
+            # snapshot path below), and --no-snapshot also has no concept of
+            # a prior snapshot at all, so a baseline can never exist here.
+            # An empty source is therefore unconditionally the
+            # unmounted/mistyped-source signature on this path.
+            if source_root_is_empty(src_root):
+                logging.error(
+                    "Refusing: source %s is empty and --no-snapshot has no "
+                    "baseline to compare against. This usually means the "
+                    "source drive is not mounted or the path is wrong. Pass "
+                    "--allow-empty-source to proceed anyway.",
+                    src_root,
+                )
+                return EXIT_REFUSED
         return _run_rsync_only(
             src_str=src_str, dest_str=dest_str, options=options, args=args
         )
@@ -594,6 +612,29 @@ def _run_backup_for_endpoints(
                     ratio * 100,
                 )
                 return EXIT_REFUSED
+
+    # No usable baseline AND an empty source: never a legitimate backup. A
+    # user who genuinely has an empty tree to back up has nothing worth
+    # protecting yet; what this actually catches is the unmounted/mistyped
+    # source that presents as an empty directory. Deliberately independent
+    # of what the destination holds — even an equally-empty destination is
+    # refused, because "empty source, no baseline" is itself the signature,
+    # not a symptom that requires a non-empty destination to notice. Must
+    # not also fire when a baseline EXISTS: that case (a real deletion) is
+    # already covered by the catastrophic-delete guard above.
+    if (
+        not have_before
+        and not args.allow_empty_source
+        and fresh_snapshot_is_empty(fresh_rows)
+    ):
+        logging.error(
+            "Refusing: source %s is empty and there is no prior snapshot to "
+            "use as a baseline. This usually means the source drive is not "
+            "mounted or the path is wrong. Pass --allow-empty-source to "
+            "proceed anyway.",
+            src_root,
+        )
+        return EXIT_REFUSED
 
     # No usable baseline: this run will transfer the whole source and delete
     # everything at the destination that is not on it. If the destination

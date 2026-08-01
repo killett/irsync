@@ -73,6 +73,7 @@ def _args(**overrides):
         require_mount=False,
         allow_nonempty_dest=False,
         allow_massive_delete=False,
+        allow_empty_source=False,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -1463,6 +1464,174 @@ class TestDestinationGate:
         # the one pre-existing file, with its original content.
         assert precious.read_text() == "irreplaceable"
         assert [p.name for p in dest.iterdir()] == ["old_backup.txt"]
+
+
+class TestEmptySourceGate:
+    """A baseline-less backup from an EMPTY source is never legitimate."""
+
+    def test_empty_source_no_baseline_refuses_and_preserves_dest(
+        self, tmp_path, basic_options, monkeypatch, caplog
+    ):
+        # Hazard A again, but caught one layer earlier: even a destination
+        # holding real data is refused here on the SOURCE side, before the
+        # destination is even inspected for foreign entries.
+        src = tmp_path / "src"
+        src.mkdir()  # exists but empty: snapshot_tree will yield only "."
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        precious = dest / "old_backup.txt"
+        precious.write_text("irreplaceable")
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        with caplog.at_level(logging.ERROR):
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert rc == EXIT_REFUSED
+        assert precious.read_text() == "irreplaceable"
+        # Pin the message to THIS guard (not Rule 2's foreign-dest refusal),
+        # which also happens to be reachable in this same scenario.
+        assert "--allow-empty-source" in caplog.text
+
+    def test_empty_source_no_baseline_refuses_even_with_empty_dest(
+        self, tmp_path, basic_options, monkeypatch
+    ):
+        # Proves the guard fires on SOURCE content alone: an empty dest
+        # means Rule 2 (foreign_dest_entries) would never fire here, so any
+        # refusal is unambiguously this guard.
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+
+        assert rc == EXIT_REFUSED
+        assert list(dest.iterdir()) == []
+
+    def test_allow_empty_source_permits_it(self, tmp_path, basic_options):
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(allow_empty_source=True),
+        )
+        assert rc == 0
+
+    def test_source_with_content_is_unaffected(self, src_dest, basic_options):
+        # Regression: the guard must not get in the way of an ordinary
+        # first backup just because there is no baseline yet.
+        src, dest = src_dest
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+
+    def test_no_snapshot_path_refuses_on_empty_source(
+        self, tmp_path, basic_options, monkeypatch
+    ):
+        # --no-snapshot never walks the tree, so there is no fresh_rows to
+        # check via the snapshot path's guard; this exercises the direct
+        # source_root_is_empty check instead.
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+        monkeypatch.setattr(
+            "irsync.backup.run_dry_run", lambda cmd: pytest.fail("rsync dry-run ran")
+        )
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(no_snapshot=True),
+        )
+
+        assert rc == EXIT_REFUSED
+
+    def test_no_snapshot_path_allow_empty_source_permits_it(
+        self, tmp_path, basic_options
+    ):
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(no_snapshot=True, allow_empty_source=True),
+        )
+        assert rc == 0
+
+    def test_empty_source_with_baseline_uses_massive_delete_guard_not_this_one(
+        self, tmp_path, make_tree, basic_options
+    ):
+        # A baseline EXISTS here, so this must NOT be caught by the
+        # empty-source guard (which only fires when there is no baseline).
+        # A user who genuinely deleted everything is handled by the
+        # existing catastrophic-delete guard and --allow-massive-delete;
+        # firing both guards would be redundant and confusing.
+        src = tmp_path / "src"
+        make_tree(src, num_files=4, depth=1)
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        # Establish a baseline via a normal first backup.
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert (src / SNAPSHOT_FILENAME).exists()
+
+        # Empty the source entirely, keeping the snapshot as the baseline.
+        for child in src.iterdir():
+            if child.name in (SNAPSHOT_FILENAME, LOCKFILE_NAME):
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+        # allow_massive_delete ALONE (no allow_empty_source) must be
+        # sufficient: if the new guard fired here too, this would refuse.
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(allow_massive_delete=True),
+        )
+        assert rc == 0
 
 
 class TestRunAllBackupsUnsafeDestination:

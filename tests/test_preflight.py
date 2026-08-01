@@ -9,7 +9,9 @@ from irsync.preflight import (
     check_mounted,
     check_rsync_available,
     foreign_dest_entries,
+    fresh_snapshot_is_empty,
     mount_gate_root,
+    source_root_is_empty,
 )
 from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME
 
@@ -114,6 +116,45 @@ class TestForeignDestEntries:
                 foreign_dest_entries(dest)
         finally:
             dest.chmod(0o755)
+
+
+class TestSourceRootIsEmpty:
+    def test_empty_source_is_empty(self, tmp_path):
+        assert source_root_is_empty(tmp_path) is True
+
+    def test_reserved_files_only_still_counts_as_empty(self, tmp_path):
+        # A source containing only a leftover lockfile from an earlier run
+        # is still empty: the reserved namespace is not user content.
+        (tmp_path / SNAPSHOT_FILENAME).write_text("{}\n")
+        (tmp_path / LOCKFILE_NAME).write_text("")
+        (tmp_path / ".irsync-snap-abc123").write_text("")
+        assert source_root_is_empty(tmp_path) is True
+
+    def test_user_content_is_not_empty(self, tmp_path):
+        (tmp_path / "photo.jpg").write_text("data")
+        assert source_root_is_empty(tmp_path) is False
+
+    def test_missing_source_counts_as_empty(self, tmp_path):
+        assert source_root_is_empty(tmp_path / "not_created_yet") is True
+
+
+class TestFreshSnapshotIsEmpty:
+    def test_root_only_row_is_empty(self):
+        # snapshot_tree always emits the root itself as path == ".", so an
+        # empty source yields exactly one row, never zero.
+        rows = [{"path": "."}]
+        assert fresh_snapshot_is_empty(rows) is True
+
+    def test_root_plus_content_is_not_empty(self):
+        rows = [{"path": "."}, {"path": "file.txt"}]
+        assert fresh_snapshot_is_empty(rows) is False
+
+    def test_empty_list_is_not_mistaken_for_a_real_empty_source(self):
+        # An empty list never actually comes out of snapshot_tree (the root
+        # row is unconditional), but the check must not silently treat a
+        # malformed/empty list as the same case as a genuine single-root
+        # snapshot — pin the exact condition rather than a laxer len()<=1.
+        assert fresh_snapshot_is_empty([]) is False
 
 
 class TestRsyncAvailable:

@@ -12,6 +12,10 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from irsync.snapshot import Row
 
 
 class EndpointNotMounted(Exception):
@@ -91,6 +95,44 @@ def check_mounted(
         )
 
 
+def _non_reserved_names(root: Path) -> list[str]:
+    """List ``root``'s top-level entries, excluding irsync's own reserved files.
+
+    Shared by :func:`foreign_dest_entries` (destination side) and
+    :func:`source_root_is_empty` (source side) so the reserved-namespace
+    list — :data:`~irsync.snapshot.SNAPSHOT_FILENAME`,
+    :data:`~irsync.snapshot.LOCKFILE_NAME`,
+    :data:`~irsync.snapshot.SNAPSHOT_TEMPFILE_PREFIX` — is spelled out in
+    exactly one place rather than duplicated per caller.
+
+    Args:
+        root: Directory to list.
+
+    Returns:
+        Sorted names of entries that are not part of irsync's namespace.
+
+    Raises:
+        FileNotFoundError: If ``root`` does not exist. Left to the caller to
+            interpret — an absent destination counts as empty, but an
+            absent source root is a different situation entirely.
+        NotADirectoryError: If ``root`` exists but is not a directory.
+        PermissionError: If ``root`` exists but cannot be listed.
+    """
+    from irsync.snapshot import (
+        LOCKFILE_NAME,
+        SNAPSHOT_FILENAME,
+        SNAPSHOT_TEMPFILE_PREFIX,
+    )
+
+    names = sorted(p.name for p in root.iterdir())
+    return [
+        name
+        for name in names
+        if name not in (SNAPSHOT_FILENAME, LOCKFILE_NAME)
+        and not name.startswith(SNAPSHOT_TEMPFILE_PREFIX)
+    ]
+
+
 def foreign_dest_entries(dest_root: Path) -> list[str]:
     """Return destination-root entries that are not irsync's own files.
 
@@ -110,26 +152,53 @@ def foreign_dest_entries(dest_root: Path) -> list[str]:
             unreadable destination is not a proven-empty one, so this fails
             closed rather than reporting no entries.
     """
-    from irsync.snapshot import (
-        LOCKFILE_NAME,
-        SNAPSHOT_FILENAME,
-        SNAPSHOT_TEMPFILE_PREFIX,
-    )
-
     try:
-        names = sorted(p.name for p in dest_root.iterdir())
+        return _non_reserved_names(dest_root)
     except (FileNotFoundError, NotADirectoryError):
         return []
     except PermissionError as e:
         raise UnsafeDestination(
             f"Cannot read destination {dest_root} to check whether it is empty: {e}"
         ) from e
-    return [
-        name
-        for name in names
-        if name not in (SNAPSHOT_FILENAME, LOCKFILE_NAME)
-        and not name.startswith(SNAPSHOT_TEMPFILE_PREFIX)
-    ]
+
+
+def source_root_is_empty(src_root: Path) -> bool:
+    """Return True if ``src_root`` has no entries besides irsync's own files.
+
+    Used on the ``--no-snapshot`` path, which never calls
+    :func:`~irsync.snapshot.snapshot_tree` and so never produces rows for
+    :func:`fresh_snapshot_is_empty` to inspect. This performs the same
+    reserved-namespace filtering directly against the filesystem, so a
+    source holding only a leftover ``.irsync.lock`` still counts as empty.
+
+    Args:
+        src_root: The source root to inspect.
+
+    Returns:
+        True if ``src_root`` does not exist, or exists with no entries
+        outside irsync's reserved namespace.
+    """
+    try:
+        return not _non_reserved_names(src_root)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+
+
+def fresh_snapshot_is_empty(rows: list[Row]) -> bool:
+    """Return True if a fresh snapshot walk found nothing but the root.
+
+    :func:`~irsync.snapshot.snapshot_tree` always includes the root
+    directory itself as a row with ``path == "."``, so an empty source
+    yields exactly one row, never zero — a caller that checked
+    ``len(rows) == 0`` would never see this fire.
+
+    Args:
+        rows: Rows from a fresh :func:`~irsync.snapshot.snapshot_tree` walk.
+
+    Returns:
+        True if ``rows`` contains only the root entry.
+    """
+    return len(rows) == 1 and rows[0]["path"] == "."
 
 
 def check_rsync_available() -> None:

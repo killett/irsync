@@ -85,6 +85,17 @@ def _build_parser(
         ),
     )
     parser.add_argument(
+        "--allow-empty-source",
+        action="store_true",
+        help=(
+            "Allow a backup with no prior snapshot to proceed even though the "
+            "source is empty. Without this, irsync refuses, because an empty "
+            "source with no baseline is the signature of an unmounted or "
+            "mistyped source, and rsync --delete-before would erase the "
+            "destination."
+        ),
+    )
+    parser.add_argument(
         "-y", "--yes", action="store_true", help="Skip the confirmation prompt."
     )
     parser.add_argument(

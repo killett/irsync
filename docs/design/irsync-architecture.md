@@ -425,6 +425,24 @@ warning end to end requires privileges neither the suite nor CI has. The
 warning never fires for `--no-snapshot` runs, which skip the snapshot/diff
 layer entirely and never call `snapshot_tree`.
 
+### 28. Empty-source-with-no-baseline guard, independent of the destination gate
+
+A baseline-less run (AD-25) from an empty source is refused even when the
+destination is also empty, because the destination gate (AD-25) never fires
+in that case and would otherwise miss it: an unmounted or mistyped source is
+exactly what an empty source with no baseline looks like. `snapshot_tree`
+always emits the root as a row with `path == "."`, so the check is
+`len(rows) == 1 and rows[0]["path"] == "."`, not `len(rows) == 0`, which
+would never fire. `--no-snapshot` never walks the tree and so has no rows to
+check; `preflight.source_root_is_empty` performs the same reserved-namespace
+filtering directly against the filesystem instead, sharing the constant list
+with `foreign_dest_entries` via a new `_non_reserved_names` helper rather
+than duplicating it a third time. The guard only runs when `not have_before`,
+so a baseline that already exists routes a 100%-deletion source instead
+through the existing >50% guard (AD-6) — deliberately not through this one,
+to avoid two guards firing on the same event. Override: `--allow-empty-source`,
+one flag for this guard alone (AD-26's one-override-per-guard rule).
+
 ## Appendix A — bug catalog
 
 28 bugs fixed across 10 review passes (passes 1-8 plus pass 10; pass 9 was

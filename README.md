@@ -69,6 +69,14 @@ the destination, and irsync would exit 0 and call it a successful backup.
   `rsync --delete-before` would remove them. A remote destination is never
   scanned, so this guard only applies locally. `--allow-nonempty-dest`
   adopts the destination anyway.
+- **A first backup would come from an empty source.** Also gated on there
+  being no usable baseline: a source with no entries besides irsync's own
+  reserved files is never a legitimate backup — it is the signature of an
+  unmounted or mistyped source — so the run refuses regardless of what the
+  destination holds. Firing only when there is no baseline keeps this
+  independent of the >50% deletion guard below: a genuine "I deleted
+  everything" run, with a baseline in place, is handled by that guard
+  instead. `--allow-empty-source` proceeds anyway.
 - **A run would delete more than half of what's recorded.** Independent of
   the above, if the diff says more than 50% of the previously-recorded
   entries are gone, the run refuses — usually a swapped-source or
@@ -80,6 +88,7 @@ the destination, and irsync would exit 0 and call it a successful backup.
 |---|---|
 | `--allow-unmounted` | proceed even if the drive is not mounted |
 | `--allow-nonempty-dest` | adopt a destination that already holds files, on a baseline-less run |
+| `--allow-empty-source` | proceed with a baseline-less run even though the source is empty |
 | `--allow-massive-delete` | proceed when the diff would delete more than half of the recorded entries |
 | `--require-mount` | also apply the mount check to endpoints outside the media base directory |
 | `--force` | run rsync even when the snapshot diff found no changes (nothing else) |

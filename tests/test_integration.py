@@ -322,6 +322,7 @@ def _args(**overrides: object) -> argparse.Namespace:
         require_mount=False,
         allow_nonempty_dest=False,
         allow_massive_delete=False,
+        allow_empty_source=False,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
