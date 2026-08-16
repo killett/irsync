@@ -216,10 +216,26 @@ pixi run typecheck    # mypy --strict
 pixi run pre-commit run --all-files
 ```
 
-While `drivecfg` is not yet on PyPI, the dev environment picks it up from a
-sibling checkout (`../drivecfg/src`) via the `PYTHONPATH` entries in
-`pixi.toml` and `pyproject.toml`. Both are marked temporary and should be
-removed once `drivecfg` can be installed as a normal dependency.
+### ⚠️ `drivecfg` must reach PyPI before irsync's next CI run or release
+
+`pyproject.toml` declares `drivecfg>=0.1,<1` as a real runtime dependency, and
+that declaration is correct — but **`drivecfg` is not on PyPI yet**. Until it
+is published there:
+
+- **CI (`.github/workflows/test.yml`) will fail.** It runs `pip install .[dev]`,
+  which cannot resolve `drivecfg` from PyPI.
+- **A release must not be cut.** `release.yml` would upload a wheel that
+  nobody can install, and PyPI filenames are permanent — see
+  [RELEASING.md](RELEASING.md).
+
+The ordering is therefore: publish `drivecfg` to PyPI **first**, then push or
+tag irsync.
+
+Locally, the dev environment sidesteps this with a temporary shim: it picks
+`drivecfg` up from a sibling checkout (`../drivecfg/src`) via the `PYTHONPATH`
+entries in `pixi.toml` and `pyproject.toml`. That shim exists **only** until
+`drivecfg` is installable from PyPI, and both entries should be removed then.
+It does not help CI, which does not have the sibling checkout.
 
 ## License
 
