@@ -231,7 +231,13 @@ def main(argv: list[str] | None = None) -> int:
         # empty. A config named explicitly (--config, or $DRIVECFG_CONFIG)
         # that isn't there is a typo, and quietly carrying on would run
         # against a different layout than the one the user named.
-        explicit = bool(args.config) or bool(os.environ.get(ENV_VAR, "").strip())
+        #
+        # Presence, not truthiness: drivecfg treats a set-but-EMPTY
+        # DRIVECFG_CONFIG as a broken explicit path (it is what a shell
+        # template interpolating an unset variable produces) and refuses it.
+        # Stripping the value before asking would make irsync disagree,
+        # swallow that refusal, and fall back to a literal path.
+        explicit = args.config is not None or ENV_VAR in os.environ
         try:
             options = Options.from_drive_config(load_config(args.config))
         except ConfigNotFoundError as exc:

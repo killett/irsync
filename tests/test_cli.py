@@ -501,6 +501,31 @@ class TestConfigFlag:
         assert "Traceback" not in result.stderr
         assert str(broken) in result.stderr
 
+    def test_empty_config_env_var_refuses_instead_of_falling_back(self, tmp_path):
+        # A set-but-empty DRIVECFG_CONFIG is what a shell template that
+        # interpolates an unset variable produces. drivecfg deliberately
+        # refuses it rather than sliding down to XDG. irsync's "was a config
+        # named explicitly?" test used to strip the value before asking, so
+        # it treated the refusal as "no config configured" and snapshotted a
+        # literal ./mypython in the cwd — exit 0, wrong tree, no warning.
+        from irsync.snapshot import SNAPSHOT_FILENAME
+
+        decoy = tmp_path / "mypython"
+        decoy.mkdir()
+        (decoy / "file.txt").write_text("hello", encoding="utf-8")
+
+        result = _run_irsync(
+            ["mypython", "--snapshot-only", "--yes"],
+            _isolated_env(tmp_path, DRIVECFG_CONFIG=""),
+            cwd=tmp_path,
+        )
+        assert result.returncode == 2, result.stdout
+        assert "Traceback" not in result.stderr
+        assert "DRIVECFG_CONFIG" in result.stderr
+        assert not (decoy / SNAPSHOT_FILENAME).exists(), (
+            "a refused config must not fall through to a literal directory"
+        )
+
 
 def test_missing_destination_for_plain_path_source_exits_cleanly(tmp_path):
     # Second of the six ValueError refusals: an ordinary path (not a drive
