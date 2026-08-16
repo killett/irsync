@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -196,16 +197,48 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # The config is loaded lazily, and only when the arguments actually need
-    # it: `irsync SRC DEST` on plain paths must keep working on a machine
-    # that has no drives.toml, so it must not even attempt discovery. Every
-    # shorthand, by contrast, fails closed — there is no fallback layout.
-    if args.config or needs_drive_config(args.source_arg, args.destination_arg):
-        from drivecfg import ConfigError, load_config
+    # it: `irsync SRC DEST` on plain paths must keep working on a machine that
+    # has no drives.toml, so it must not even attempt discovery. Everything
+    # that cannot be resolved without a config fails closed instead.
+    #
+    # --snapshot-only sits between the two. It takes no destination, so its
+    # source could equally be a configured name or an ordinary directory, and
+    # only the config can say which. So consult the config when there is one
+    # (resolve_source prefers a configured name), but treat a config that is
+    # simply absent as "there is no configured name", not as a refusal — any
+    # OTHER config error (unreadable, malformed, invalid) still refuses, since
+    # silently ignoring a broken config is how a run ends up somewhere the
+    # user did not intend.
+    required = needs_drive_config(
+        args.source_arg, args.destination_arg, snapshot_only=args.snapshot_only
+    )
+    optional = (
+        not required
+        and args.snapshot_only
+        and not args.destination_arg
+        and bool(args.source_arg.strip())
+    )
+    if args.config or required or optional:
+        from drivecfg import ConfigError, ConfigNotFoundError, load_config
 
+        # ENV_VAR is not re-exported from the package root, so take it from
+        # the module that owns it rather than hardcoding the variable name.
+        from drivecfg.discovery import ENV_VAR
+
+        # "Not found" is only tolerable when it was *discovery* that came up
+        # empty. A config named explicitly (--config, or $DRIVECFG_CONFIG)
+        # that isn't there is a typo, and quietly carrying on would run
+        # against a different layout than the one the user named.
+        explicit = bool(args.config) or bool(os.environ.get(ENV_VAR, "").strip())
         try:
             options = Options.from_drive_config(load_config(args.config))
+        except ConfigNotFoundError as exc:
+            if explicit or required:
+                logging.error("%s", exc)
+                return EXIT_REFUSED
+            options = Options.without_drive_config()
         except ConfigError as exc:
-            print(str(exc), file=sys.stderr)
+            logging.error("%s", exc)
             return EXIT_REFUSED
     else:
         options = Options.without_drive_config()

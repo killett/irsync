@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,9 +11,6 @@ from irsync.paths import ensure_local_dir, is_rsync_remote
 
 ALL_ARG = "ALL"
 """Source argument meaning "every entry in the configured backup order"."""
-
-HOME_ARG = "~"
-"""Source argument for the home directory. Resolved as a configured endpoint."""
 
 
 @dataclass
@@ -29,14 +25,12 @@ class Options:
 
     Attributes:
         base_dir: Parent directory of every drive; the mount-gate root.
-        homedir: The current user's home directory.
         drive_config: The loaded layout, or None for a plain-path run.
         exclude_dirs: Directory names rsync is told to skip by default.
         max_errors: How many failures an ``ALL`` run tolerates before stopping.
     """
 
     base_dir: Path
-    homedir: Path
     drive_config: DriveConfig | None = None
     exclude_dirs: list[str] = field(
         default_factory=lambda: [".Trash-1000", ".cache", "unfinished_downloads"]
@@ -63,8 +57,7 @@ class Options:
         Returns:
             Options whose only path knowledge is the mount-gate root.
         """
-        homedir = Path.home().resolve()
-        return cls(base_dir=Path("/") / "media" / homedir.name, homedir=homedir)
+        return cls(base_dir=Path("/") / "media" / Path.home().resolve().name)
 
     @classmethod
     def from_drive_config(cls, cfg: DriveConfig) -> Options:
@@ -77,9 +70,7 @@ class Options:
             Options whose drives, endpoints, backup order, and mount-gate
             root all come from ``cfg``.
         """
-        return cls(
-            base_dir=cfg.base_dir, homedir=Path.home().resolve(), drive_config=cfg
-        )
+        return cls(base_dir=cfg.base_dir, drive_config=cfg)
 
 
 @dataclass(frozen=True)
@@ -97,21 +88,38 @@ def _is_letter_token(token: str) -> bool:
     return len(token) == 1 and token.isalpha()
 
 
-def needs_drive_config(source_arg: str, destination_arg: str | None) -> bool:
+def needs_drive_config(
+    source_arg: str,
+    destination_arg: str | None,
+    *,
+    snapshot_only: bool = False,
+) -> bool:
     """Return True when this invocation cannot be resolved without a config.
 
-    Deliberately decided from the argument text alone, never from what
-    happens to exist in the working directory, so the same command always
-    means the same thing. A plain path — anything containing a separator,
-    a ``~``-prefixed path, ``.``/``..``, or an rsync remote — never needs a
-    config, which is what keeps ``irsync SRC DEST`` working on a machine
-    that has no ``drives.toml`` at all. A bare name with no destination has
-    no other possible meaning than a configured drive or endpoint, so it
-    does need one.
+    Decided from the argument text alone, never from what happens to exist in
+    the working directory, so the same command always means the same thing.
+    The rules, in order:
+
+    * ``ALL`` and a single-letter drive id always need one — neither has any
+      meaning outside a config, whether or not a destination was given.
+    * **Any** source paired with a destination needs none. That is the form
+      decision 1 protects (``irsync SRC DEST``), and it also covers ``~`` and
+      ``~/sub``, which :func:`resolve_endpoints` hands straight to
+      ``Path.expanduser``. Loading a config there would refuse a run that
+      never consults it.
+    * A source with no destination needs one, because it cannot work without
+      it: either the config names it (a drive, ``~``, ``mypython``, or an
+      endpoint whose own source path was typed out in full) or the
+      invocation is an error.
+    * ...unless ``--snapshot-only`` is in play, which takes no destination
+      and snapshots any directory. :func:`resolve_source` consults the config
+      when there is one and falls back to the literal path when there is not,
+      so an absent config is not fatal there.
 
     Args:
         source_arg: Raw source argument from the user.
         destination_arg: Raw destination argument, or None.
+        snapshot_only: True when ``--snapshot-only`` was passed.
 
     Returns:
         True if the caller must load a :class:`drivecfg.DriveConfig` first.
@@ -120,17 +128,11 @@ def needs_drive_config(source_arg: str, destination_arg: str | None) -> bool:
     destination = (destination_arg or "").strip()
     if not token:
         return False
-    if token.upper() == ALL_ARG or token == HOME_ARG:
-        return True
-    if _is_letter_token(token):
+    if token.upper() == ALL_ARG or _is_letter_token(token):
         return True
     if destination:
         return False
-    if is_rsync_remote(token):
-        return False
-    if token in {".", ".."} or token.startswith(HOME_ARG):
-        return False
-    return os.sep not in token
+    return not snapshot_only
 
 
 def _require_config(options: Options, source_arg: str) -> DriveConfig:
@@ -144,22 +146,18 @@ def _require_config(options: Options, source_arg: str) -> DriveConfig:
         The loaded :class:`drivecfg.DriveConfig`.
 
     Raises:
-        ValueError: If no config was loaded. The message distinguishes a
-            shorthand that needs a config from a plain path that is simply
-            missing its destination.
+        ValueError: If no config was loaded. The message names both ways out,
+            since a caller who simply forgot the destination folder needs a
+            destination, not a config file.
     """
     if options.drive_config is not None:
         return options.drive_config
-    if needs_drive_config(source_arg, None):
-        raise ValueError(
-            f"The source argument {source_arg!r} names a configured drive or "
-            "endpoint, but no drive config was loaded. Pass --config PATH, "
-            "set DRIVECFG_CONFIG, or create drives.toml under "
-            "$XDG_CONFIG_HOME/drivecfg (usually ~/.config/drivecfg)."
-        )
     raise ValueError(
-        "Destination folder is required unless the source argument is a "
-        f"configured drive or endpoint. The source argument is {source_arg!r}."
+        f"The source argument {source_arg!r} has no destination folder, so it "
+        "must name a configured drive or endpoint — but no drive config was "
+        "loaded. Give a destination folder, or pass --config PATH, set "
+        "DRIVECFG_CONFIG, or create drives.toml under $XDG_CONFIG_HOME/drivecfg "
+        "(usually ~/.config/drivecfg)."
     )
 
 
@@ -216,6 +214,29 @@ def _endpoint_name(cfg: DriveConfig, token: str) -> str | None:
     return None
 
 
+def _find_named(cfg: DriveConfig, token: str) -> tuple[Path, Path] | None:
+    """Return the ``(source, dest)`` pair ``token`` names, or None for neither.
+
+    Args:
+        cfg: The loaded configuration.
+        token: A drive id, an endpoint name, or an endpoint's own source path.
+
+    Returns:
+        The configured pair, or None when the config knows nothing by that
+        name. Callers decide whether "not a configured name" is an error
+        (:func:`resolve_endpoints`, which has no other way to find a
+        destination) or a cue to treat the token as a literal path
+        (:func:`resolve_source`, which needs no destination).
+    """
+    drive = _find_drive(cfg, token)
+    if drive is not None:
+        return drive.path, drive.backup_path
+    name = _endpoint_name(cfg, token)
+    if name is None:
+        return None
+    return cfg.endpoint(name)
+
+
 def _resolve_named(cfg: DriveConfig, token: str) -> tuple[Path, Path]:
     """Resolve a destination-less source argument against the config.
 
@@ -230,11 +251,8 @@ def _resolve_named(cfg: DriveConfig, token: str) -> tuple[Path, Path]:
         ValueError: If ``token`` is neither a configured drive nor a
             configured endpoint. The message names both sets.
     """
-    drive = _find_drive(cfg, token)
-    if drive is not None:
-        return drive.path, drive.backup_path
-    name = _endpoint_name(cfg, token)
-    if name is None:
+    pair = _find_named(cfg, token)
+    if pair is None:
         drives = ", ".join(d.id for d in cfg.drives) or "(none)"
         endpoints = ", ".join(cfg.endpoints) or "(none)"
         raise ValueError(
@@ -242,16 +260,21 @@ def _resolve_named(cfg: DriveConfig, token: str) -> tuple[Path, Path]:
             f"configured drive or endpoint. The source argument is {token!r}. "
             f"Configured drives: {drives}. Configured endpoints: {endpoints}."
         )
-    return cfg.endpoint(name)
+    return pair
 
 
 def resolve_source(source_arg: str, options: Options) -> Path:
     """Resolve a source-only argument (no destination) to a local directory.
 
-    Shares the shorthand rules with :func:`resolve_endpoints` so that
+    Shares the shorthand lookups with :func:`resolve_endpoints` so that
     ``--snapshot-only`` cannot drift into a second, divergent notion of what
-    a drive id or endpoint name means. A plain path is still accepted with
-    no config at all, because a snapshot needs no destination.
+    a drive id or endpoint name means. It differs in one deliberate way: with
+    no destination to disambiguate against, the question here is only "does
+    the config know this name?". A token the config does not know is taken as
+    a literal directory, which is what keeps ``cd /mnt && irsync data
+    --snapshot-only`` — a bare relative directory name — working, with or
+    without a config. A single-letter drive id is the exception: it has no
+    meaning outside a config, so it still fails closed.
 
     Args:
         source_arg: Raw source argument from the user.
@@ -261,21 +284,22 @@ def resolve_source(source_arg: str, options: Options) -> Path:
         The resolved source directory.
 
     Raises:
-        ValueError: If the argument is empty, or names no configured drive
-            or endpoint.
+        ValueError: If the argument is empty, or is a drive id that the
+            config does not define (or that has no config to define it).
         FileNotFoundError: If the resolved directory does not exist.
         NotADirectoryError: If the resolved path is not a directory.
     """
     token = source_arg.strip()
     if not token:
         raise ValueError("Source argument is required.")
-    if not needs_drive_config(token, None):
-        return ensure_local_dir(token)
-    cfg = _require_config(options, token)
     if _is_letter_token(token):
+        cfg = _require_config(options, token)
         return ensure_local_dir(_lookup_drive(cfg, token).path)
-    source, _dest = _resolve_named(cfg, token)
-    return ensure_local_dir(source)
+    if options.drive_config is not None:
+        named = _find_named(options.drive_config, token)
+        if named is not None:
+            return ensure_local_dir(named[0])
+    return ensure_local_dir(token)
 
 
 def resolve_endpoints(

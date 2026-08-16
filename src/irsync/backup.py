@@ -414,6 +414,10 @@ def _run_snapshot_only(
     Raises:
         SourceNotMounted: If the source's drive is not mounted and
             ``args.allow_unmounted`` is not set.
+        ValueError: If ``source_arg`` is empty, or is a drive id that no
+            loaded config defines (from :func:`~irsync.options.resolve_source`).
+        FileNotFoundError: If the resolved source does not exist.
+        NotADirectoryError: If the resolved source is not a directory.
     """
     # PermissionError from _source_lock is caught below and turned into
     # EXIT_REFUSED rather than documented here as a raise: it never escapes

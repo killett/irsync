@@ -67,9 +67,9 @@ schema_version = 1
 base_dir = "/media/alice"
 
 drives = [
-  { id = "P", enclosure = "desk-dock" },
-  { id = "Q", dir = "photos", backup_dir = "photos_backup" },
-  { id = "N", backup = false },
+  { id = "A", enclosure = "desk-dock" },
+  { id = "B", dir = "photos", backup_dir = "photos_backup" },
+  { id = "C", backup = false },
 ]
 
 # What `irsync ALL` runs, in order. "*drives" expands to every drive
@@ -78,18 +78,18 @@ backup_order = ["mypython", "*drives", "~"]
 
 [endpoints."~"]
 source = { path = "~" }
-dest = { drive = "P", path = "home_backup" }
+dest = { drive = "A", path = "home_backup" }
 
 [endpoints.mypython]
-source = { drive = "Q", path = "projects/python" }
-dest = { drive = "P", path = "python_backup" }
+source = { drive = "B", path = "projects/python" }
+dest = { drive = "A", path = "python_backup" }
 ```
 
 With that file in place:
 
 ```bash
-irsync P            # /media/alice/P  ->  /media/alice/P_backup
-irsync Q            # /media/alice/photos  ->  /media/alice/photos_backup
+irsync A            # /media/alice/A  ->  /media/alice/A_backup
+irsync B            # /media/alice/photos  ->  /media/alice/photos_backup
 irsync mypython     # the configured source/destination pair
 irsync ALL --yes    # every entry of backup_order, in order
 ```
@@ -110,7 +110,7 @@ tree. Left unchecked, an empty *source* lets `rsync --delete-before` erase
 the destination, and irsync would exit 0 and call it a successful backup.
 
 - **The drive is not mounted.** Any endpoint that resolves under the media
-  base directory (e.g. `/media/<user>/G`) must sit on a mounted filesystem;
+  base directory (e.g. `/media/<user>/A`) must sit on a mounted filesystem;
   the base directory itself is exempt, since it is the ordinary directory
   that *contains* mountpoints, not a mountpoint itself. `--require-mount`
   extends this check to endpoints outside the base directory too (the base

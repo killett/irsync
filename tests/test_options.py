@@ -197,34 +197,44 @@ class TestWithoutDriveConfig:
         ep = resolve_endpoints(str(s), str(d), options)
         assert (ep.source, ep.dest) == (s, d)
 
+    def test_tilde_with_a_destination_needs_no_config(self, tmp_path):
+        # `irsync '~' /backup` never consults the config — the destination is
+        # explicit and '~' is expanded by Path.expanduser. Catches the gate
+        # demanding a config for an invocation that then ignores it.
+        options = Options.without_drive_config()
+        dest = tmp_path / "dst"
+        dest.mkdir()
+        ep = resolve_endpoints("~", str(dest), options)
+        assert ep.source == Path.home().resolve()
+        assert ep.dest == dest
+
     def test_shorthand_without_config_says_how_to_supply_one(self):
         # Catches a missing config surfacing as an AttributeError on None, or
         # as a refusal that does not tell the user what to do next.
         options = Options.without_drive_config()
         with pytest.raises(ValueError) as excinfo:
-            resolve_endpoints("G", None, options)
+            resolve_endpoints("X", None, options)
         message = str(excinfo.value)
         assert "--config" in message
         assert "DRIVECFG_CONFIG" in message
         assert "drives.toml" in message
 
-    def test_plain_path_without_a_destination_asks_for_a_destination(self):
-        # A path is not a shorthand: with no config loaded, the refusal must
-        # say the destination is missing, not send the user off to write a
-        # drives.toml they do not need.
+    def test_source_without_a_destination_offers_both_ways_out(self):
+        # A caller who simply forgot the destination folder needs a
+        # destination, not a config file. Catches a refusal that names only
+        # one of the two fixes.
         options = Options.without_drive_config()
         with pytest.raises(ValueError) as excinfo:
             resolve_endpoints("/some/path", None, options)
         message = str(excinfo.value)
-        assert "Destination folder is required" in message
-        assert "--config" not in message
+        assert "destination folder" in message
+        assert "--config" in message
 
     def test_base_dir_defaults_to_the_media_mount_root(self):
         # base_dir survives as the mount-gate root only. Catches it being
         # dropped (which would disable the gate) or made config-only.
         options = Options.without_drive_config()
         assert options.base_dir == Path("/media") / Path.home().resolve().name
-        assert options.homedir == Path.home().resolve()
         assert options.drive_config is None
 
     def test_all_backups_is_empty_without_a_config(self):
@@ -270,37 +280,62 @@ class TestNeedsDriveConfig:
         [
             ("ALL", None),
             ("all", None),
+            ("ALL", "/abs/dst"),  # rejected later, but still config-dependent
+            ("X", None),
+            ("x", None),
+            ("X", "/abs/dst"),  # the letter itself still comes from the config
             ("~", None),
-            ("G", None),
-            ("g", None),
-            ("G", "/abs/dst"),
             ("mypython", None),
             ("archive", None),
+            # No destination means the source MUST name something the config
+            # knows — a path typed in full can still match an endpoint's own
+            # source, which is how the pre-config alias behaved.
+            ("/abs/src", None),
+            ("./rel", None),
+            (".", None),
+            ("host:/path", None),
         ],
     )
-    def test_shorthands_need_a_config(self, source, destination):
-        # Catches the lazy-loading gate missing a shorthand, which would send
-        # it into resolution with no config and fail with the wrong message.
+    def test_config_dependent_forms_need_a_config(self, source, destination):
+        # Catches the lazy-loading gate missing a form that cannot be resolved
+        # without a config, which would refuse (or mis-resolve) with the wrong
+        # message.
         assert needs_drive_config(source, destination) is True
 
     @pytest.mark.parametrize(
         ("source", "destination"),
         [
             ("/abs/src", "/abs/dst"),
-            ("/abs/src", None),
             ("./rel", "/abs/dst"),
+            ("~", "/abs/dst"),  # expanded by Path.expanduser, never by config
             ("~/sub", "/abs/dst"),
-            ("host:/path", None),
             ("user@host:/path", "/abs/dst"),
+            ("/abs/src", "user@host:/path"),
             ("mypython", "/abs/dst"),
-            (".", None),
             ("", None),
         ],
     )
-    def test_plain_paths_do_not_need_a_config(self, source, destination):
+    def test_two_argument_forms_do_not_need_a_config(self, source, destination):
         # Catches config discovery being attempted for an ordinary rsync run,
         # which would make irsync unusable without a drives.toml.
         assert needs_drive_config(source, destination) is False
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            ("data", False),  # a bare relative directory name
+            ("/abs/src", False),
+            ("~", False),
+            ("mypython", False),
+            ("X", True),  # a drive id means nothing without a config
+            ("ALL", True),
+        ],
+    )
+    def test_snapshot_only_relaxes_everything_but_drive_ids(self, source, expected):
+        # --snapshot-only takes no destination and snapshots any directory, so
+        # resolve_source falls back to the literal path. Catches the gate
+        # refusing `irsync data --snapshot-only` on a machine with no config.
+        assert needs_drive_config(source, None, snapshot_only=True) is expected
 
 
 class TestResolveSource:
@@ -325,6 +360,41 @@ class TestResolveSource:
         src = tmp_path / "anywhere"
         src.mkdir()
         assert resolve_source(str(src), Options.without_drive_config()) == src
+
+    def test_bare_relative_name_falls_back_to_a_real_directory(
+        self, basic_options, tmp_path, monkeypatch
+    ):
+        # `cd /mnt && irsync data --snapshot-only`: "data" names no configured
+        # drive or endpoint, so it is an ordinary relative directory. Catches
+        # the name-shaped-token rule refusing a working plain-path run. A
+        # config IS loaded here, to prove the fallback is about the name being
+        # unknown, not about the config being absent.
+        workdir = tmp_path / "elsewhere"
+        (workdir / "data").mkdir(parents=True)
+        monkeypatch.chdir(workdir)
+        assert resolve_source("data", basic_options) == (workdir / "data").resolve()
+
+    def test_a_configured_name_wins_over_a_directory_of_the_same_name(
+        self, basic_options, tmp_path, monkeypatch
+    ):
+        # The other direction of the same rule: when the config DOES know the
+        # name, the configured path wins over a same-named directory in the
+        # working directory. Catches the fallback swallowing configured names.
+        cfg = basic_options.drive_config
+        workdir = tmp_path / "elsewhere"
+        (workdir / "mypython").mkdir(parents=True)
+        monkeypatch.chdir(workdir)
+        assert (
+            resolve_source("mypython", basic_options)
+            == cfg.drive(DRIVE_IDS[0]).path / "code"
+        )
+
+    def test_tilde_without_a_config_still_snapshots_the_home_directory(self):
+        # Pre-migration, `--snapshot-only ~` snapshotted the home directory
+        # with no config in play. Catches that becoming a refusal.
+        assert resolve_source("~", Options.without_drive_config()) == (
+            Path.home().resolve()
+        )
 
     def test_unconfigured_letter_is_refused(self, basic_options):
         with pytest.raises(ValueError, match="Configured drives: A, B, C, D"):

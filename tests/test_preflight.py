@@ -21,15 +21,15 @@ from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME
 class TestMountGateRoot:
     def test_drive_letter_endpoint_gates_on_itself(self, tmp_path):
         base = tmp_path / "media" / "u"
-        assert mount_gate_root(base / "G", base) == base / "G"
+        assert mount_gate_root(base / "A", base) == base / "A"
 
     def test_subdirectory_gates_on_the_drive_above_it(self, tmp_path):
         # Configured endpoints usually resolve to a folder INSIDE a drive
         # rather than to the drive itself. Gating on the endpoint would
         # reject every one of them.
         base = tmp_path / "media" / "u"
-        deep = base / "G" / "projects" / "code"
-        assert mount_gate_root(deep, base) == base / "G"
+        deep = base / "A" / "projects" / "code"
+        assert mount_gate_root(deep, base) == base / "A"
 
     def test_path_outside_base_dir_is_exempt(self, tmp_path):
         base = tmp_path / "media" / "u"
@@ -48,7 +48,7 @@ class TestCheckMounted:
 
     def test_unmounted_drive_raises(self, tmp_path, monkeypatch):
         base = tmp_path / "media" / "u"
-        drive = base / "G"
+        drive = base / "A"
         drive.mkdir(parents=True)
         monkeypatch.setattr("os.path.ismount", lambda p: False)
 
@@ -59,7 +59,7 @@ class TestCheckMounted:
 
     def test_mounted_drive_passes(self, tmp_path, monkeypatch):
         base = tmp_path / "media" / "u"
-        drive = base / "G"
+        drive = base / "A"
         drive.mkdir(parents=True)
         monkeypatch.setattr("os.path.ismount", lambda p: str(p) == str(drive))
 
@@ -91,7 +91,7 @@ class TestCheckMounted:
 
     def test_default_role_raises_source_not_mounted(self, tmp_path, monkeypatch):
         base = tmp_path / "media" / "u"
-        drive = base / "G"
+        drive = base / "A"
         drive.mkdir(parents=True)
         monkeypatch.setattr("os.path.ismount", lambda p: False)
 
@@ -100,7 +100,7 @@ class TestCheckMounted:
 
     def test_role_source_raises_source_not_mounted(self, tmp_path, monkeypatch):
         base = tmp_path / "media" / "u"
-        drive = base / "G"
+        drive = base / "A"
         drive.mkdir(parents=True)
         monkeypatch.setattr("os.path.ismount", lambda p: False)
 
@@ -111,7 +111,7 @@ class TestCheckMounted:
         self, tmp_path, monkeypatch
     ):
         base = tmp_path / "media" / "u"
-        drive = base / "G_backup"
+        drive = base / "A_backup"
         drive.mkdir(parents=True)
         monkeypatch.setattr("os.path.ismount", lambda p: False)
 
@@ -124,7 +124,7 @@ class TestCheckMounted:
         # Existing `except EndpointNotMounted` call sites (cli.main,
         # run_backup's --allow-unmounted handler) must keep working.
         base = tmp_path / "media" / "u"
-        drive = base / "G"
+        drive = base / "A"
         drive.mkdir(parents=True)
         monkeypatch.setattr("os.path.ismount", lambda p: False)
 
@@ -135,7 +135,7 @@ class TestCheckMounted:
         self, tmp_path, monkeypatch
     ):
         base = tmp_path / "media" / "u"
-        drive = base / "G_backup"
+        drive = base / "A_backup"
         drive.mkdir(parents=True)
         monkeypatch.setattr("os.path.ismount", lambda p: False)
 
@@ -149,7 +149,7 @@ class TestCheckMounted:
         # handler that specifically wants SourceNotMounted must not
         # accidentally also catch a DestinationNotMounted.
         base = tmp_path / "media" / "u"
-        drive = base / "G_backup"
+        drive = base / "A_backup"
         drive.mkdir(parents=True)
         monkeypatch.setattr("os.path.ismount", lambda p: False)
 

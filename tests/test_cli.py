@@ -1,4 +1,3 @@
-import logging
 import os
 import subprocess
 import sys
@@ -205,6 +204,34 @@ def test_identical_source_and_destination_exits_cleanly(tmp_path):
     assert "Traceback" not in result.stderr
 
 
+def _isolated_env(tmp_path, **overrides):
+    """Return an env whose config discovery can only fail: no file anywhere.
+
+    `HOME` and `XDG_CONFIG_HOME` are pointed at directories that do not exist
+    and `DRIVECFG_CONFIG` is removed, so every discovery step misses.
+    """
+    env = {
+        **ENV,
+        "HOME": str(tmp_path / "home"),
+        "XDG_CONFIG_HOME": str(tmp_path / "empty"),
+    }
+    env.pop("DRIVECFG_CONFIG", None)
+    env.update(overrides)
+    return env
+
+
+def _run_irsync(argv, env, cwd=None):
+    """Run `python -m irsync` for real, so refusals are checked on real stderr."""
+    return subprocess.run(
+        [sys.executable, "-m", "irsync", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        cwd=cwd,
+    )
+
+
 class TestNoConfigBehaviour:
     """Nothing about a plain-path run may depend on a drive config existing."""
 
@@ -258,29 +285,92 @@ class TestNoConfigBehaviour:
         assert "/media/" not in out
         assert "--config" in out
 
-    def test_shorthand_without_config_exits_two(self, tmp_path, monkeypatch, capsys):
-        # Catches a missing config surfacing as a traceback rather than a
-        # refusal that tells the user where to put the file.
-        self._isolate(monkeypatch, tmp_path)
-        assert main(["G"]) == 2
-        err = capsys.readouterr().err
-        assert "drives.toml" in err
-        assert "DRIVECFG_CONFIG" in err
-        assert str(tmp_path / "empty" / "drivecfg" / "drives.toml") in err
+    def test_tilde_with_a_destination_works_without_a_config(self, tmp_path):
+        # `irsync '~' /backup` is a two-argument plain-path run: '~' is
+        # expanded by Path.expanduser and the config is never consulted.
+        # Catches the lazy-load gate demanding a config it then ignores.
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / "file.txt").write_text("hello", encoding="utf-8")
+        dest = tmp_path / "backup"
+        dest.mkdir()
+        result = _run_irsync(
+            ["~", str(dest), "--yes", "--no-snapshot", "--dry-run"],
+            _isolated_env(tmp_path),
+        )
+        assert result.returncode == 0, result.stderr
+        assert str(home) in result.stderr, (
+            "'~' must expand to the home directory, not to a configured endpoint"
+        )
 
-    def test_all_without_config_exits_two(self, tmp_path, monkeypatch, capsys):
+    def test_bare_name_snapshot_only_works_without_a_config(self, tmp_path):
+        # `cd /mnt && irsync data --snapshot-only`: a bare relative directory
+        # name with no destination. Catches the name-shaped-token rule turning
+        # a working plain-path snapshot into a refusal.
+        from irsync.snapshot import SNAPSHOT_FILENAME
+
+        source = tmp_path / "data"
+        source.mkdir()
+        (source / "file.txt").write_text("hello", encoding="utf-8")
+        result = _run_irsync(
+            ["data", "--snapshot-only", "--yes"],
+            _isolated_env(tmp_path),
+            cwd=tmp_path,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (source / SNAPSHOT_FILENAME).is_file()
+
+    def test_snapshot_only_tolerates_a_config_that_was_never_configured(
+        self, tmp_path, monkeypatch
+    ):
+        # Discovery coming up empty is the normal state for someone who has
+        # never written a drives.toml. Under --snapshot-only that must not be
+        # a refusal — the source is simply taken as a literal directory.
+        from irsync.snapshot import SNAPSHOT_FILENAME
+
+        self._isolate(monkeypatch, tmp_path)
+        source = tmp_path / "data"
+        source.mkdir()
+        (source / "file.txt").write_text("hello", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        assert main(["data", "--snapshot-only", "--yes"]) == 0
+        assert (source / SNAPSHOT_FILENAME).is_file()
+
+    def test_snapshot_only_still_refuses_an_explicit_config_that_is_missing(
+        self, tmp_path, monkeypatch
+    ):
+        # The tolerance above is for a config nobody asked for. A config named
+        # explicitly through $DRIVECFG_CONFIG that is not there is a typo, and
+        # carrying on would snapshot from a layout the user did not name.
+        missing = tmp_path / "typo.toml"
+        monkeypatch.setenv("DRIVECFG_CONFIG", str(missing))
+        source = tmp_path / "data"
+        source.mkdir()
+        (source / "file.txt").write_text("hello", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        assert main(["data", "--snapshot-only", "--yes"]) == 2
+
+    def test_shorthand_without_config_exits_two(self, tmp_path):
+        # Catches a missing config surfacing as a traceback rather than a
+        # refusal that reaches the terminal and says where to put the file.
+        result = _run_irsync(["X"], _isolated_env(tmp_path))
+        assert result.returncode == 2
+        assert "Traceback" not in result.stderr
+        assert "drives.toml" in result.stderr
+        assert "DRIVECFG_CONFIG" in result.stderr
+        assert str(tmp_path / "empty" / "drivecfg" / "drives.toml") in result.stderr
+
+    def test_all_without_config_exits_two(self, tmp_path):
         # ALL has no meaning without a backup order; it must refuse rather
         # than quietly back up nothing and report success.
-        self._isolate(monkeypatch, tmp_path)
-        assert main(["ALL"]) == 2
-        assert "drives.toml" in capsys.readouterr().err
+        result = _run_irsync(["ALL"], _isolated_env(tmp_path))
+        assert result.returncode == 2
+        assert "drives.toml" in result.stderr
 
-    def test_named_endpoint_without_config_exits_two(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        self._isolate(monkeypatch, tmp_path)
-        assert main(["mypython"]) == 2
-        assert "drives.toml" in capsys.readouterr().err
+    def test_named_endpoint_without_config_exits_two(self, tmp_path):
+        result = _run_irsync(["mypython"], _isolated_env(tmp_path))
+        assert result.returncode == 2
+        assert "drives.toml" in result.stderr
 
 
 class TestConfigFlag:
@@ -325,27 +415,91 @@ class TestConfigFlag:
         assert main(["ALL", "--yes", "--config", str(config)]) == 0
         assert attempted == ["C", "mypython", "B"]
 
-    def test_unconfigured_letter_exits_two_naming_the_configured_drives(
-        self, tmp_path, monkeypatch, caplog
-    ):
-        # Intentional behaviour change: an unconfigured letter used to resolve
-        # to /media/$USER/<letter>. It must now refuse, and say what IS
-        # configured.
+    def test_snapshot_only_still_prefers_a_configured_name(self, tmp_path):
+        # The plain-path fallback must not swallow configured names: with a
+        # config in play, `irsync mypython --snapshot-only` still snapshots the
+        # configured source, not a directory of that name in the cwd.
+        from irsync.snapshot import SNAPSHOT_FILENAME
+
         from .conftest import write_drive_config
 
-        monkeypatch.delenv("DRIVECFG_CONFIG", raising=False)
         config = write_drive_config(tmp_path)
-        with caplog.at_level(logging.ERROR):
-            assert main(["Z", "--yes", "--config", str(config)]) == 2
-        assert "Configured drives: A, B, C, D" in caplog.text
+        code_dir = tmp_path / "media" / "A" / "code"
+        (code_dir / "payload.bin").write_bytes(b"x" * 3)
+        decoy = tmp_path / "mypython"
+        decoy.mkdir()
 
-    def test_broken_config_path_exits_two_without_a_traceback(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        monkeypatch.delenv("DRIVECFG_CONFIG", raising=False)
+        result = _run_irsync(
+            ["mypython", "--snapshot-only", "--yes", "--allow-unmounted"],
+            _isolated_env(tmp_path, DRIVECFG_CONFIG=str(config)),
+            cwd=tmp_path,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (code_dir / SNAPSHOT_FILENAME).is_file()
+        assert not (decoy / SNAPSHOT_FILENAME).exists(), (
+            "a same-named directory in the cwd must not win over the config"
+        )
+
+    def test_endpoint_source_path_resolves_through_main(self, tmp_path):
+        # Pre-migration, naming an endpoint's own source directory (rather
+        # than its short name) resolved to that endpoint's backup. Catches the
+        # alias being unreachable from the CLI because the gate never loads a
+        # config for a path-shaped source.
+        from .conftest import write_drive_config
+
+        config = write_drive_config(tmp_path)
+        home = tmp_path / "home"
+        (home / "file.txt").write_text("hello", encoding="utf-8")
+        home_backup = tmp_path / "media" / "D" / "home_backup"
+
+        result = _run_irsync(
+            [str(home), "--yes", "--no-snapshot", "--dry-run", "--allow-unmounted"],
+            _isolated_env(tmp_path, DRIVECFG_CONFIG=str(config)),
+        )
+        assert result.returncode == 0, result.stderr
+        assert str(home_backup) in result.stderr, (
+            "the destination must come from the endpoint whose source was named"
+        )
+
+    def test_unconfigured_letter_exits_two_naming_the_configured_drives(self, tmp_path):
+        # Intentional behaviour change: an unconfigured letter used to resolve
+        # to /media/$USER/<letter>. It must now refuse on the terminal, and say
+        # what IS configured.
+        from .conftest import write_drive_config
+
+        config = write_drive_config(tmp_path)
+        result = _run_irsync(
+            ["Z", "--yes", "--config", str(config)], _isolated_env(tmp_path)
+        )
+        assert result.returncode == 2
+        assert "Traceback" not in result.stderr
+        assert "Configured drives: A, B, C, D" in result.stderr
+
+    def test_broken_config_path_exits_two_without_a_traceback(self, tmp_path):
         missing = tmp_path / "absent.toml"
-        assert main(["G", "--config", str(missing)]) == 2
-        assert str(missing) in capsys.readouterr().err
+        result = _run_irsync(["X", "--config", str(missing)], _isolated_env(tmp_path))
+        assert result.returncode == 2
+        assert "Traceback" not in result.stderr
+        assert str(missing) in result.stderr
+
+    def test_malformed_config_refuses_even_under_snapshot_only(self, tmp_path):
+        # --snapshot-only tolerates an ABSENT config (it falls back to the
+        # literal path), but a config that exists and is broken must still be
+        # reported — silently ignoring it is how a run ends up elsewhere.
+        source = tmp_path / "data"
+        source.mkdir()
+        (source / "file.txt").write_text("hello", encoding="utf-8")
+        broken = tmp_path / "drives.toml"
+        broken.write_text("schema_version = 1\nbase_dir = \n", encoding="utf-8")
+
+        result = _run_irsync(
+            ["data", "--snapshot-only", "--yes"],
+            _isolated_env(tmp_path, DRIVECFG_CONFIG=str(broken)),
+            cwd=tmp_path,
+        )
+        assert result.returncode == 2
+        assert "Traceback" not in result.stderr
+        assert str(broken) in result.stderr
 
 
 def test_missing_destination_for_plain_path_source_exits_cleanly(tmp_path):
