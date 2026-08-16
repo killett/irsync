@@ -54,9 +54,25 @@ irsync can also take shorthands — a drive id, a named endpoint such as `~` or
 `mypython`, or `ALL` for a whole-machine run — instead of a source and
 destination. Those names mean nothing on their own, so they are read from a
 [`drivecfg`](https://github.com/killett/drivecfg) config file. irsync loads it
-lazily: a run on plain paths never looks for one, and a run that uses a
-shorthand without one refuses with exit code 2, naming every location it
-tried.
+lazily, and how lazily depends on the invocation:
+
+- **`irsync SOURCE DEST`**, two plain paths, never looks for one. This is the
+  only shape that skips discovery entirely.
+- **A shorthand** (a drive id, an endpoint name, or `ALL`) always looks for
+  one, whether or not a destination was also given, and refuses with exit
+  code 2 if none is found, naming every location it tried.
+- **A single path with no destination** also always looks for one, even
+  though it might turn out to be an ordinary directory rather than a
+  configured name — irsync has to check before it can tell the difference —
+  and refuses the same way if none is found.
+- **`--snapshot-only`** is the one case that looks without requiring: it
+  consults a config if one exists (so a configured name still resolves), but
+  a missing file is not an error there — it falls back to treating the
+  argument as a literal path.
+
+Naming a config explicitly, with `--config` or `$DRIVECFG_CONFIG`, always
+triggers a load attempt and always refuses if that specific file is missing,
+regardless of which of the above shapes it's attached to.
 
 The file is discovered from `--config PATH`, then `$DRIVECFG_CONFIG`, then
 `$XDG_CONFIG_HOME/drivecfg/drives.toml` (usually

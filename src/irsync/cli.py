@@ -32,8 +32,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "letter), a configured endpoint name such as '~' for the home "
             "directory or 'mypython' for the Python directory, 'ALL' to back "
             "up every entry in the configured backup order, or an rsync "
-            "remote like host:/path. Every shorthand needs a drive config; "
-            "plain paths do not."
+            "remote like host:/path. Every shorthand needs a drive config, "
+            "and so does a bare path given without a DESTINATION (it must "
+            "be checked against the config before it can be treated as a "
+            "plain path); a path given together with a DESTINATION does not."
         ),
     )
     parser.add_argument(
