@@ -2,11 +2,22 @@
 
 import os
 import random
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from drivecfg import load_config
 
 from irsync.options import Options
+
+# Invented drive ids, deliberately unrelated to any real machine's layout:
+# this repo is public, and the point of the drivecfg migration is that the
+# real drive list lives in the user's config file, never in the source tree.
+DRIVE_IDS = ("A", "B", "C", "D")
+# Endpoints hang off the first and last ids, so B and C are free for tests
+# that need a configured drive whose directory does NOT exist.
+SOURCE_DRIVE = DRIVE_IDS[0]
+BACKUP_DRIVE = DRIVE_IDS[-1]
 
 
 @pytest.fixture
@@ -32,26 +43,99 @@ def make_tree(tmp_path):
     return _factory
 
 
-@pytest.fixture
-def basic_options(tmp_path):
-    """Build an Options object rooted at tmp_path so tests don't touch the real filesystem layout."""
-    base = tmp_path / "media"
-    base.mkdir()
-    home = tmp_path / "home"
-    home.mkdir()
-    pydir = base / "G" / "Documents" / "Programming" / "python"
-    pydir.mkdir(parents=True)
-    homedir_backup = base / "M" / "homedir_backup" / "u"
-    homedir_backup.mkdir(parents=True)
-    python_backup = base / "M" / "python_backup"
-    python_backup.mkdir(parents=True)
-    return Options(
-        base_dir=base,
-        homedir=home,
-        homedir_backup=homedir_backup,
-        python_dir=pydir,
-        python_backup_dir=python_backup,
+def subprocess_pythonpath() -> str:
+    """Return the PYTHONPATH a `python -m irsync` subprocess needs.
+
+    A subprocess inherits neither pytest's `pythonpath` setting nor pixi's
+    activation environment, so point it at the same source trees this test
+    process imported from. drivecfg is listed explicitly because until it is
+    published to PyPI it is only importable via the local-development path
+    shim, not from site-packages.
+    """
+    import drivecfg
+
+    import irsync
+
+    return os.pathsep.join(
+        str(Path(str(module.__file__)).resolve().parent.parent)
+        for module in (irsync, drivecfg)
     )
+
+
+def write_drive_config(
+    root: Path,
+    *,
+    drives: Sequence[str] = DRIVE_IDS,
+    backup_order: Sequence[str] | None = None,
+) -> Path:
+    """Write a drives.toml under ``root`` and return its path.
+
+    The layout is entirely tmp_path-rooted and uses invented drive ids. Only
+    the directories the named endpoints resolve to are created; the drives
+    themselves are left absent so a test that needs a present drive has to
+    create it, and a test that needs a missing one gets a genuinely missing
+    one.
+
+    Args:
+        root: Directory to write the config and the media tree under.
+        drives: Drive ids to configure, in file order.
+        backup_order: backup_order tokens. Defaults to the endpoints plus
+            every drive.
+
+    Returns:
+        The path of the written config file.
+    """
+    base = root / "media"
+    base.mkdir(exist_ok=True)
+    (root / "home").mkdir(exist_ok=True)
+    (base / SOURCE_DRIVE / "code").mkdir(parents=True, exist_ok=True)
+    (base / BACKUP_DRIVE / "home_backup").mkdir(parents=True, exist_ok=True)
+    (base / BACKUP_DRIVE / "python_backup").mkdir(parents=True, exist_ok=True)
+    order = ["mypython", "*drives", "~"] if backup_order is None else backup_order
+    drive_tables = ", ".join(f'{{ id = "{drive}" }}' for drive in drives)
+    order_tokens = ", ".join(f'"{token}"' for token in order)
+    config = root / "drives.toml"
+    config.write_text(
+        f"""schema_version = 1
+base_dir = "{base}"
+drives = [{drive_tables}]
+backup_order = [{order_tokens}]
+
+[endpoints."~"]
+source = {{ path = "{root / "home"}" }}
+dest = {{ drive = "{BACKUP_DRIVE}", path = "home_backup" }}
+
+[endpoints.mypython]
+source = {{ drive = "{SOURCE_DRIVE}", path = "code" }}
+dest = {{ drive = "{BACKUP_DRIVE}", path = "python_backup" }}
+""",
+        encoding="utf-8",
+    )
+    return config
+
+
+@pytest.fixture
+def make_options(tmp_path):
+    """Return a factory building Options from a tmp_path-rooted drive config."""
+
+    def _factory(
+        *,
+        drives: Sequence[str] = DRIVE_IDS,
+        backup_order: Sequence[str] | None = None,
+        root: Path | None = None,
+    ) -> Options:
+        config = write_drive_config(
+            root or tmp_path, drives=drives, backup_order=backup_order
+        )
+        return Options.from_drive_config(load_config(config))
+
+    return _factory
+
+
+@pytest.fixture
+def basic_options(make_options):
+    """Options backed by an invented, tmp_path-rooted drive config."""
+    return make_options()
 
 
 def tree_signature(root: Path) -> dict[str, tuple[int, bytes]]:

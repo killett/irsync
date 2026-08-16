@@ -10,9 +10,7 @@ from pathlib import Path
 from irsync import __version__
 
 
-def _build_parser(
-    options_homedir_backup: str, options_python_backup: str
-) -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="irsync",
         description=(
@@ -29,10 +27,12 @@ def _build_parser(
         nargs="?",
         type=str,
         help=(
-            "Source: a full path, a drive letter, '~' for the home directory "
-            f"(backed up to {options_homedir_backup}), 'mypython' for the Python directory "
-            f"(backed up to {options_python_backup}), 'ALL' to back up every configured drive, "
-            "or an rsync remote like host:/path."
+            "Source: a full path, a configured drive id (usually a drive "
+            "letter), a configured endpoint name such as '~' for the home "
+            "directory or 'mypython' for the Python directory, 'ALL' to back "
+            "up every entry in the configured backup order, or an rsync "
+            "remote like host:/path. Every shorthand needs a drive config; "
+            "plain paths do not."
         ),
     )
     parser.add_argument(
@@ -40,8 +40,8 @@ def _build_parser(
         nargs="?",
         type=str,
         help=(
-            "Destination. Optional when SOURCE is a drive letter, '~', or 'mypython'; "
-            "in those cases it defaults to the configured backup location."
+            "Destination. Optional when SOURCE is a configured drive id or "
+            "endpoint name; in those cases it comes from the drive config."
         ),
     )
     parser.add_argument(
@@ -52,6 +52,14 @@ def _build_parser(
         type=str,
         metavar="PATH",
         help="SSH identity file for remote endpoints.",
+    )
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        help=(
+            "Drive config file to use instead of the discovered one "
+            "($DRIVECFG_CONFIG, then $XDG_CONFIG_HOME/drivecfg/drives.toml)."
+        ),
     )
     parser.add_argument(
         "--no-exclude",
@@ -137,11 +145,10 @@ def _build_parser(
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
-    from irsync.backup import run_all_backups, run_backup
-    from irsync.options import Options
+    from irsync.backup import EXIT_REFUSED, run_all_backups, run_backup
+    from irsync.options import Options, needs_drive_config
 
-    options = Options.from_defaults()
-    parser = _build_parser(str(options.homedir_backup), str(options.python_backup_dir))
+    parser = _build_parser()
 
     if argv is None:
         argv = sys.argv[1:]
@@ -182,12 +189,26 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    from irsync.backup import EXIT_REFUSED
     from irsync.preflight import (
         EndpointNotMounted,
         RsyncUnavailable,
         UnsafeDestination,
     )
+
+    # The config is loaded lazily, and only when the arguments actually need
+    # it: `irsync SRC DEST` on plain paths must keep working on a machine
+    # that has no drives.toml, so it must not even attempt discovery. Every
+    # shorthand, by contrast, fails closed — there is no fallback layout.
+    if args.config or needs_drive_config(args.source_arg, args.destination_arg):
+        from drivecfg import ConfigError, load_config
+
+        try:
+            options = Options.from_drive_config(load_config(args.config))
+        except ConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_REFUSED
+    else:
+        options = Options.without_drive_config()
 
     try:
         if args.source_arg.strip().upper() == "ALL":

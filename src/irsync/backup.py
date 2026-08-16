@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from irsync.diff import Changes, compute_changes
-from irsync.options import Endpoints, Options, resolve_endpoints
+from irsync.options import Endpoints, Options, resolve_endpoints, resolve_source
 from irsync.paths import with_trailing_slash
 from irsync.preflight import (
     DestinationNotMounted,
@@ -418,20 +418,12 @@ def _run_snapshot_only(
     # PermissionError from _source_lock is caught below and turned into
     # EXIT_REFUSED rather than documented here as a raise: it never escapes
     # this function.
-    from irsync.paths import ensure_local_dir
-
-    # Resolve drive-letter / ~ / mypython shortcuts manually so the shorthand
-    # still works without requiring a dest.
-    arg = source_arg.strip()
-    src: Path
-    if len(arg) == 1 and arg.isalpha():
-        src = ensure_local_dir(options.base_dir / arg.upper())
-    elif arg == "~":
-        src = ensure_local_dir(options.homedir)
-    elif arg == "mypython":
-        src = ensure_local_dir(options.python_dir)
-    else:
-        src = ensure_local_dir(arg)
+    #
+    # Drive ids and endpoint names are resolved by the shared resolver in
+    # irsync.options rather than re-implemented here: this path used to carry
+    # its own copy of the shorthand rules, which is exactly how the two could
+    # drift into disagreeing about what a drive id points at.
+    src = resolve_source(source_arg, options)
 
     try:
         check_mounted(
@@ -851,12 +843,13 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
 
     Exit-code contract: **an unmounted SOURCE is a skip, not an error; an
     unmounted DESTINATION is a real error.**
-    :data:`Options.all_backups` lists every drive the user might ever
-    attach, and on any given day most of them are absent, so a source
-    that isn't there is the normal case and an ALL run that skips it still
-    reports success (:class:`~irsync.preflight.SourceNotMounted`, alongside
-    a plain missing directory). A destination that isn't mounted is
-    different: if drive ``G`` is mounted but ``G_backup`` is not, the run
+    :data:`Options.all_backups` is the configured backup order, which lists
+    every drive the user might ever attach, and on any given day most of
+    them are absent, so a source that isn't there is the normal case and an
+    ALL run that skips it still reports success
+    (:class:`~irsync.preflight.SourceNotMounted`, alongside a plain missing
+    directory). A destination that isn't mounted is different: if a drive is
+    mounted but its backup drive is not, the run
     would back up nothing while still exiting 0, which is exactly the
     silent-success hazard this branch exists to close. So
     :class:`~irsync.preflight.DestinationNotMounted` — like an unreadable

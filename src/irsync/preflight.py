@@ -59,10 +59,10 @@ class RsyncUnavailable(Exception):
 def mount_gate_root(path: Path, base_dir: Path) -> Path | None:
     """Return the component below ``base_dir`` that must be a mountpoint.
 
-    The shorthand destinations are subdirectories of a mounted drive rather
-    than mountpoints themselves (``mypython`` resolves inside drive ``G``;
-    the ``~`` backup lands inside drive ``M``), so the gate is applied to the
-    first component below ``base_dir``, not to the endpoint.
+    Configured endpoints often resolve to subdirectories of a mounted drive
+    rather than to mountpoints themselves (an endpoint's backup typically
+    lands in a folder inside a drive), so the gate is applied to the first
+    component below ``base_dir``, not to the endpoint.
 
     Args:
         path: The resolved endpoint.

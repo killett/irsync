@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: System :: Archiving :: Backup",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = ["drivecfg>=0.1,<1"]
 
 [project.scripts]
 irsync = "irsync.cli:main"
@@ -100,7 +100,12 @@ check_untyped_defs = false
 
 [tool.pytest.ini_options]
 addopts = "-v"
-pythonpath = ["src"]
+# TEMPORARY local-development shim: `../drivecfg/src` puts the sibling
+# drivecfg checkout on the path because drivecfg is not on PyPI yet. The
+# declared dependency above is the real contract; drop the second entry
+# (and the matching PYTHONPATH in pixi.toml) once `pixi add --pypi drivecfg`
+# can install it.
+pythonpath = ["src", "../drivecfg/src"]
 
 [tool.coverage.run]
 source = ["src"]

@@ -17,6 +17,15 @@ pytest-cov = "*"
 pre-commit = "*"
 rsync = ">=3.4.1,<4"
 
+# TEMPORARY local-development shim. irsync depends on drivecfg (see
+# pyproject.toml), but drivecfg is not published to PyPI yet, so it cannot be
+# installed into this environment. Putting the sibling checkout's src on
+# PYTHONPATH makes `pixi run` tasks import it. Delete this section (and the
+# second pythonpath entry in pyproject.toml) once drivecfg is installable
+# with `pixi add --pypi drivecfg`.
+[activation.env]
+PYTHONPATH = "src:../drivecfg/src"
+
 [tasks]
 # On macOS, pixi-installed tools (pytest, ruff, mypy) can fail due to shebang path resolution issues. Using python -m <tool> bypasses this reliably.
 test = "python -m pytest"

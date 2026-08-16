@@ -15,7 +15,9 @@ pip install irsync
 ```
 
 `irsync` calls the system `rsync` binary, so `rsync` must be installed and on
-your `PATH`. It has no other runtime dependencies (standard library only).
+your `PATH`. Its only Python dependency is
+[`drivecfg`](https://github.com/killett/drivecfg), which supplies the optional
+drive shorthands described under [Configuration](#configuration).
 
 ## Quick usage
 
@@ -44,8 +46,59 @@ irsync /mnt/data --snapshot-only
 irsync /mnt/data /mnt/data_backup --no-snapshot
 ```
 
-Drive-letter shorthand (`G`), `~` for home, `mypython` for the Python source
-directory, and `ALL` for every configured drive are also supported.
+Everything above works on plain paths and needs no configuration at all.
+
+## Configuration
+
+irsync can also take shorthands — a drive id, a named endpoint such as `~` or
+`mypython`, or `ALL` for a whole-machine run — instead of a source and
+destination. Those names mean nothing on their own, so they are read from a
+[`drivecfg`](https://github.com/killett/drivecfg) config file. irsync loads it
+lazily: a run on plain paths never looks for one, and a run that uses a
+shorthand without one refuses with exit code 2, naming every location it
+tried.
+
+The file is discovered from `--config PATH`, then `$DRIVECFG_CONFIG`, then
+`$XDG_CONFIG_HOME/drivecfg/drives.toml` (usually
+`~/.config/drivecfg/drives.toml`). A short example, with invented drive ids:
+
+```toml
+schema_version = 1
+base_dir = "/media/alice"
+
+drives = [
+  { id = "P", enclosure = "desk-dock" },
+  { id = "Q", dir = "photos", backup_dir = "photos_backup" },
+  { id = "N", backup = false },
+]
+
+# What `irsync ALL` runs, in order. "*drives" expands to every drive
+# with backup = true, in file order.
+backup_order = ["mypython", "*drives", "~"]
+
+[endpoints."~"]
+source = { path = "~" }
+dest = { drive = "P", path = "home_backup" }
+
+[endpoints.mypython]
+source = { drive = "Q", path = "projects/python" }
+dest = { drive = "P", path = "python_backup" }
+```
+
+With that file in place:
+
+```bash
+irsync P            # /media/alice/P  ->  /media/alice/P_backup
+irsync Q            # /media/alice/photos  ->  /media/alice/photos_backup
+irsync mypython     # the configured source/destination pair
+irsync ALL --yes    # every entry of backup_order, in order
+```
+
+A drive id that the config does not define is refused with exit code 2 and a
+message naming the drives that *are* configured — irsync never guesses a path
+for an unknown name. `base_dir` is used only as the mount-gate root (see
+[Safety](#safety)); when no config is loaded it defaults to
+`/media/<your-username>`, which can refuse a run but can never redirect one.
 
 ## Safety
 
@@ -128,7 +181,7 @@ src/irsync/
   diff.py           # compute_changes, plan_directory_moves (cycle-safe)
   replay.py         # apply_moves — atomic os.rename on the dest tree
   rsync_runner.py   # build_rsync_command, run_dry_run, run_real_sync
-  options.py        # Options dataclass, resolve_endpoints
+  options.py        # Options dataclass, drivecfg-backed resolve_endpoints/resolve_source
   backup.py         # the orchestrator: snapshot → diff → replay → rsync → persist
   cli.py            # argparse CLI
   __main__.py       # `python -m irsync` entry point
@@ -146,6 +199,11 @@ pixi run format       # ruff format
 pixi run typecheck    # mypy --strict
 pixi run pre-commit run --all-files
 ```
+
+While `drivecfg` is not yet on PyPI, the dev environment picks it up from a
+sibling checkout (`../drivecfg/src`) via the `PYTHONPATH` entries in
+`pixi.toml` and `pyproject.toml`. Both are marked temporary and should be
+removed once `drivecfg` can be installed as a normal dependency.
 
 ## License
 

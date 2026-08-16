@@ -1175,19 +1175,19 @@ class TestRunAllBackups:
     """`irsync ALL` treats an unmounted drive as a skip, not a failure."""
 
     @staticmethod
-    def _options_with(basic_options, entries):
-        basic_options.all_backups = entries
-        return basic_options
+    def _options_with(make_options, entries):
+        """Options whose configured backup order is exactly ``entries``."""
+        return make_options(backup_order=entries)
 
     def test_missing_drive_is_skipped_without_failing_the_run(
-        self, basic_options, monkeypatch, caplog
+        self, make_options, monkeypatch, caplog
     ):
         # Most of the 16 configured entries are external drives that are not
         # mounted on any given day, so "drive absent" is the normal case for
         # an ALL run. Exiting non-zero here would make every nightly ALL run
         # look like a failure.
         def fake_backup(*, source_arg, destination_arg, options, args):
-            if source_arg == "H":
+            if source_arg == "C":
                 raise FileNotFoundError(f"Path '{source_arg}' does not exist.")
             return 0
 
@@ -1195,21 +1195,21 @@ class TestRunAllBackups:
 
         with caplog.at_level(logging.WARNING):
             rc = run_all_backups(
-                options=self._options_with(basic_options, ["G", "H", "~"]),
+                options=self._options_with(make_options, ["B", "C", "~"]),
                 args=_args(),
             )
 
         assert rc == 0
-        assert "H" in caplog.text
+        assert "C" in caplog.text
 
     def test_summary_names_the_drives_that_were_backed_up(
-        self, basic_options, monkeypatch, caplog
+        self, make_options, monkeypatch, caplog
     ):
         # The run collected a `successful` list but never reported it, so an
         # ALL run that skipped a drive left no record of which drives DID get
         # backed up — exactly the audit trail a cron log needs.
         def fake_backup(*, source_arg, destination_arg, options, args):
-            if source_arg == "H":
+            if source_arg == "C":
                 raise FileNotFoundError(f"Path '{source_arg}' does not exist.")
             return 0
 
@@ -1217,26 +1217,26 @@ class TestRunAllBackups:
 
         with caplog.at_level(logging.INFO):
             run_all_backups(
-                options=self._options_with(basic_options, ["G", "H", "~"]),
+                options=self._options_with(make_options, ["B", "C", "~"]),
                 args=_args(),
             )
 
-        assert "G" in caplog.text and "~" in caplog.text
+        assert "B" in caplog.text and "~" in caplog.text
         summary = [r for r in caplog.records if "backed up" in r.getMessage()]
         assert summary, "the summary must report which drives were backed up"
-        assert "G" in summary[0].getMessage()
+        assert "B" in summary[0].getMessage()
         assert "~" in summary[0].getMessage()
 
-    def test_a_real_backup_error_still_fails_the_run(self, basic_options, monkeypatch):
+    def test_a_real_backup_error_still_fails_the_run(self, make_options, monkeypatch):
         # The skip-is-not-an-error rule must not swallow genuine failures:
         # a non-zero return from run_backup is a real error and must surface.
         def fake_backup(*, source_arg, destination_arg, options, args):
-            return EXIT_REFUSED if source_arg == "G" else 0
+            return EXIT_REFUSED if source_arg == "B" else 0
 
         monkeypatch.setattr("irsync.backup.run_backup", fake_backup)
 
         rc = run_all_backups(
-            options=self._options_with(basic_options, ["G", "~"]),
+            options=self._options_with(make_options, ["B", "~"]),
             args=_args(),
         )
         assert rc == 1
@@ -1421,7 +1421,7 @@ class TestMountGate:
 
 class TestRunAllBackupsMountSkips:
     def test_unmounted_drive_counts_as_missing_not_error(
-        self, basic_options, monkeypatch, caplog
+        self, make_options, monkeypatch, caplog
     ):
         # Contract from commit 044c036: a drive that isn't there is a skip.
         # An unmounted drive is the same situation, so it must not flip the
@@ -1429,17 +1429,17 @@ class TestRunAllBackupsMountSkips:
         from irsync.preflight import EndpointNotMounted
 
         def fake_backup(*, source_arg, destination_arg, options, args):
-            if source_arg == "H":
-                raise EndpointNotMounted("H is not a mountpoint")
+            if source_arg == "C":
+                raise EndpointNotMounted("C is not a mountpoint")
             return 0
 
         monkeypatch.setattr("irsync.backup.run_backup", fake_backup)
-        basic_options.all_backups = ["G", "H", "~"]
+        options = make_options(backup_order=["B", "C", "~"])
 
         with caplog.at_level(logging.INFO):
-            rc = run_all_backups(options=basic_options, args=_args())
+            rc = run_all_backups(options=options, args=_args())
         assert rc == 0
-        # rc == 0 alone would still pass if H had been appended to
+        # rc == 0 alone would still pass if C had been appended to
         # `successful` instead of `missing` (a bug that silently reports an
         # unmounted drive as backed up). Pin the actual summary line so the
         # drive is provably named under missing/skipped, not successful.
@@ -1448,8 +1448,8 @@ class TestRunAllBackupsMountSkips:
             for r in caplog.records
             if "missing/skipped" in r.getMessage()
         )
-        assert "missing/skipped=1 (H)" in summary
-        assert "backed up=2 (G, ~)" in summary
+        assert "missing/skipped=1 (C)" in summary
+        assert "backed up=2 (B, ~)" in summary
 
 
 class TestDestinationGate:
@@ -1713,7 +1713,7 @@ class TestEmptySourceGate:
 
 class TestRunAllBackupsUnsafeDestination:
     def test_unsafe_destination_counts_as_error_not_skip_and_batch_continues(
-        self, basic_options, monkeypatch
+        self, make_options, monkeypatch
     ):
         # An unreadable destination is not a benign absence like a missing or
         # unmounted drive - it must be a real error (exit code 1), unlike the
@@ -1726,16 +1726,16 @@ class TestRunAllBackupsUnsafeDestination:
 
         def fake_backup(*, source_arg, destination_arg, options, args):
             attempted.append(source_arg)
-            if source_arg == "H":
-                raise UnsafeDestination("H's destination cannot be read")
+            if source_arg == "C":
+                raise UnsafeDestination("C's destination cannot be read")
             return 0
 
         monkeypatch.setattr("irsync.backup.run_backup", fake_backup)
-        basic_options.all_backups = ["G", "H", "~"]
+        options = make_options(backup_order=["B", "C", "~"])
 
-        rc = run_all_backups(options=basic_options, args=_args())
+        rc = run_all_backups(options=options, args=_args())
 
-        assert attempted == ["G", "H", "~"], "batch must continue past the bad drive"
+        assert attempted == ["B", "C", "~"], "batch must continue past the bad drive"
         assert rc == 1, "an unreadable destination must not keep the exit code at 0"
 
 
@@ -1743,30 +1743,30 @@ class TestRunAllBackupsDestinationMountGate:
     """An unmounted DESTINATION must fail an ALL run; an unmounted SOURCE must not."""
 
     def test_unmounted_destination_is_error_and_batch_continues(
-        self, make_tree, basic_options, monkeypatch, caplog
+        self, make_tree, make_options, monkeypatch, caplog
     ):
-        # Real end-to-end wiring (no mocking of run_backup): drive G's SOURCE
-        # is mounted but its DESTINATION (G_backup) is not. That must be
+        # Real end-to-end wiring (no mocking of run_backup): drive B's SOURCE
+        # is mounted but its DESTINATION (B_backup) is not. That must be
         # counted as a real error, not a skip, and must not stop the batch
-        # from reaching H.
-        base = basic_options.base_dir
-        g_src = base / "G"
-        make_tree(g_src, num_files=2, depth=1)
-        g_dest = base / "G_backup"
-        g_dest.mkdir()
-        h_src = base / "H"
-        h_src.mkdir()
+        # from reaching C.
+        options = make_options(backup_order=["B", "C"])
+        base = options.base_dir
+        b_src = base / "B"
+        make_tree(b_src, num_files=2, depth=1)
+        b_dest = base / "B_backup"
+        b_dest.mkdir()
+        c_src = base / "C"
+        c_src.mkdir()
 
-        # Only G's source reports as mounted. G's destination and H's source
+        # Only B's source reports as mounted. B's destination and C's source
         # (a plain unmounted drive) do not.
-        monkeypatch.setattr("os.path.ismount", lambda p: str(p) == str(g_src))
+        monkeypatch.setattr("os.path.ismount", lambda p: str(p) == str(b_src))
         monkeypatch.setattr(
             "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
         )
-        basic_options.all_backups = ["G", "H"]
 
         with caplog.at_level(logging.INFO):
-            rc = run_all_backups(options=basic_options, args=_args())
+            rc = run_all_backups(options=options, args=_args())
 
         assert rc == 1, "an unmounted destination must not keep the exit code at 0"
         summary = next(
@@ -1774,31 +1774,31 @@ class TestRunAllBackupsDestinationMountGate:
             for r in caplog.records
             if "missing/skipped" in r.getMessage()
         )
-        # G is neither successful nor missing: it's a counted error. H, whose
+        # B is neither successful nor missing: it's a counted error. C, whose
         # SOURCE is unmounted, is still the benign skip.
-        assert "missing/skipped=1 (H)" in summary
+        assert "missing/skipped=1 (C)" in summary
         assert "errors=1" in summary
         assert "backed up=0" in summary
 
     def test_source_unmounted_in_the_same_run_still_keeps_exit_0(
-        self, basic_options, monkeypatch
+        self, make_options, monkeypatch
     ):
         # Regression for the skip-is-not-an-error contract (commit 044c036):
         # this must hold even now that check_mounted distinguishes roles.
-        # Only H is configured here (source unmounted, real check_mounted,
-        # no mocking of run_backup) so this test fails independently of the
-        # destination-side assertions above.
-        base = basic_options.base_dir
-        h_src = base / "H"
-        h_src.mkdir()
+        # Only C is in the backup order here (source unmounted, real
+        # check_mounted, no mocking of run_backup) so this test fails
+        # independently of the destination-side assertions above.
+        options = make_options(backup_order=["C"])
+        base = options.base_dir
+        c_src = base / "C"
+        c_src.mkdir()
 
         monkeypatch.setattr("os.path.ismount", lambda p: False)
         monkeypatch.setattr(
             "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
         )
-        basic_options.all_backups = ["H"]
 
-        rc = run_all_backups(options=basic_options, args=_args())
+        rc = run_all_backups(options=options, args=_args())
 
         assert rc == 0, "an unmounted SOURCE in an ALL run must still be a skip"
 

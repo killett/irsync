@@ -5,16 +5,16 @@ import os
 import runpy
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
-import irsync
 from irsync.snapshot import LOCKFILE_NAME
 
+from .conftest import subprocess_pythonpath
+
 # The subprocess doesn't inherit pytest's pythonpath setting, so point it at
-# the same source tree this test process imported irsync from.
-_SRC_DIR = str(Path(irsync.__file__).resolve().parent.parent)
+# the same source trees this test process imported irsync (and drivecfg) from.
+_PYTHONPATH = subprocess_pythonpath()
 
 
 def _run_module_main():
@@ -54,7 +54,7 @@ class TestExitCodePropagationEndToEnd:
         lock = (src / LOCKFILE_NAME).open("w")
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            env = {**os.environ, "PYTHONPATH": _SRC_DIR}
+            env = {**os.environ, "PYTHONPATH": _PYTHONPATH}
             proc = subprocess.run(
                 [sys.executable, "-m", "irsync", str(src), str(dest), "--yes"],
                 capture_output=True,

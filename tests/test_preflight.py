@@ -24,10 +24,11 @@ class TestMountGateRoot:
         assert mount_gate_root(base / "G", base) == base / "G"
 
     def test_subdirectory_gates_on_the_drive_above_it(self, tmp_path):
-        # mypython resolves to a path INSIDE drive G, and the ~ backup lands
-        # inside drive M. Gating on the endpoint itself would reject both.
+        # Configured endpoints usually resolve to a folder INSIDE a drive
+        # rather than to the drive itself. Gating on the endpoint would
+        # reject every one of them.
         base = tmp_path / "media" / "u"
-        deep = base / "G" / "Documents" / "Programming" / "python"
+        deep = base / "G" / "projects" / "code"
         assert mount_gate_root(deep, base) == base / "G"
 
     def test_path_outside_base_dir_is_exempt(self, tmp_path):
