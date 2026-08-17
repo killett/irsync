@@ -17,20 +17,20 @@ Before the first release, register this repo as a trusted publisher on PyPI:
    - Workflow name: `release.yml`
    - Environment name: `pypi`
 
-## Blocker: publish `drivecfg` first
+## `drivecfg` dependency
 
-`pyproject.toml` declares `drivecfg>=0.1,<1` as a runtime dependency, and
-`drivecfg` **is not on PyPI yet**. Until it is:
+`pyproject.toml` declares `drivecfg>=0.1,<1` as a runtime dependency.
+`drivecfg` 0.1.0 is published on PyPI (verified: `pip install drivecfg` and
+`pixi install` both resolve it, zero runtime dependencies of its own), so
+there is no publish-ordering step to check before a release — `pip install
+.[dev]` and CI's `test.yml` resolve it like any other PyPI dependency. The
+temporary `PYTHONPATH=../drivecfg/src` development shim that used to cover
+the gap has been removed from `pixi.toml` / `pyproject.toml`.
 
-- CI (`test.yml`) cannot resolve `pip install .[dev]` and will fail on push.
-- A release cut now would publish a wheel nobody can install, and PyPI
-  filenames are permanent (see the immutability warning below) — the mistake
-  could not be undone, only superseded by a new version.
-
-So step 0 of any release is: **publish `drivecfg` to PyPI, then verify
-`pip install drivecfg` works in a clean environment.** The local
-`PYTHONPATH=../drivecfg/src` shim in `pixi.toml` / `pyproject.toml` covers
-development only and must be removed once this blocker clears.
+If `drivecfg` ever needs a new release of its own first (e.g. a bugfix irsync
+depends on), the same rule that applied originally still holds: publish
+`drivecfg` to PyPI, then verify `pip install drivecfg` in a clean environment,
+before cutting the irsync release that needs it.
 
 ## Cutting a release
 

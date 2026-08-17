@@ -8,6 +8,15 @@ exclude-newer = "7d"
 # [exclude-newer]
 # affected-package = "0d"
 
+# drivecfg is a first-party package: we publish its releases ourselves, so
+# the supply-chain cooldown that guards against a compromised upstream
+# doesn't apply to it. Scoped to drivecfg only — the global 7d cooldown
+# above still governs every other dependency. (Note: the manifest key is
+# `pypi-exclude-newer`, not `[exclude-newer]` with a package sub-key —
+# verified against pixi 0.69.0's schema.)
+[pypi-exclude-newer]
+drivecfg = "0d"
+
 [dependencies]
 python = ">=3.12,<3.14"
 ruff = "*"
@@ -17,15 +26,6 @@ pytest-cov = "*"
 pre-commit = "*"
 rsync = ">=3.4.1,<4"
 
-# TEMPORARY local-development shim. irsync depends on drivecfg (see
-# pyproject.toml), but drivecfg is not published to PyPI yet, so it cannot be
-# installed into this environment. Putting the sibling checkout's src on
-# PYTHONPATH makes `pixi run` tasks import it. Delete this section (and the
-# second pythonpath entry in pyproject.toml) once drivecfg is installable
-# with `pixi add --pypi drivecfg`.
-[activation.env]
-PYTHONPATH = "src:../drivecfg/src"
-
 [tasks]
 # On macOS, pixi-installed tools (pytest, ruff, mypy) can fail due to shebang path resolution issues. Using python -m <tool> bypasses this reliably.
 test = "python -m pytest"
@@ -33,3 +33,6 @@ test-cov = "python -m pytest --cov"  # Later on, consider adding --cov-fail-unde
 lint = "python -m ruff check ."
 format = "python -m ruff format ."
 typecheck = "python -m mypy ."
+
+[pypi-dependencies]
+drivecfg = ">=0.1.0, <0.2"

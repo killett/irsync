@@ -216,26 +216,21 @@ pixi run typecheck    # mypy --strict
 pixi run pre-commit run --all-files
 ```
 
-### ⚠️ `drivecfg` must reach PyPI before irsync's next CI run or release
+### `drivecfg` on PyPI
 
-`pyproject.toml` declares `drivecfg>=0.1,<1` as a real runtime dependency, and
-that declaration is correct — but **`drivecfg` is not on PyPI yet**. Until it
-is published there:
+`pyproject.toml` declares `drivecfg>=0.1,<1` as a real runtime dependency.
+`drivecfg` [0.1.0 is published on PyPI](https://pypi.org/project/drivecfg/0.1.0/),
+so this resolves normally: CI's `pip install .[dev]` and the dev environment's
+`pixi install` both install the real package. The formerly-required ordering
+("publish drivecfg before pushing or tagging irsync") is satisfied and no
+longer something a release needs to check.
 
-- **CI (`.github/workflows/test.yml`) will fail.** It runs `pip install .[dev]`,
-  which cannot resolve `drivecfg` from PyPI.
-- **A release must not be cut.** `release.yml` would upload a wheel that
-  nobody can install, and PyPI filenames are permanent — see
-  [RELEASING.md](RELEASING.md).
-
-The ordering is therefore: publish `drivecfg` to PyPI **first**, then push or
-tag irsync.
-
-Locally, the dev environment sidesteps this with a temporary shim: it picks
-`drivecfg` up from a sibling checkout (`../drivecfg/src`) via the `PYTHONPATH`
-entries in `pixi.toml` and `pyproject.toml`. That shim exists **only** until
-`drivecfg` is installable from PyPI, and both entries should be removed then.
-It does not help CI, which does not have the sibling checkout.
+The dev environment used to sidestep the missing package with a temporary
+`PYTHONPATH` shim pointing at a sibling `../drivecfg/src` checkout, wired into
+`pixi.toml` and `pyproject.toml`. That shim has been removed now that
+`drivecfg` installs normally; `pixi.toml`'s `[pypi-exclude-newer]` carries a
+scoped override so the workspace's cooldown doesn't block picking up
+first-party releases the same day they're published.
 
 ## License
 
