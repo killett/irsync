@@ -371,8 +371,10 @@ what the tests actually pin down before removing them.
 
 Baseline before any edit: `pixi run pre-commit run --all-files` green
 (`ruff`, `ruff-format`, `mypy` all pass), `322 passed, 1 skipped`. After:
-same gate green, same `322 passed, 1 skipped` — every change in this pass is
-strictly behavior-preserving, and no test was added or removed.
+same gate green, `323 passed` — 323 collected either way, the btime probe
+simply ran on the final invocation instead of skipping (the tmpfs variation
+the 2026-07-30 entry records). Every change in this pass is strictly
+behavior-preserving, and no test was added or removed.
 
 Scope was whole-repo, which defaults to audit-only; the project owner opted
 in to mutation. The owner also asked that the long-standing uncommitted
