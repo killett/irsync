@@ -114,7 +114,7 @@ def _atomic_write_snapshot(rows: list[Row], source_root: Path, target: Path) -> 
     snapshot from a different tree at the source root can refuse to use it.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmpname = tempfile.mkstemp(prefix=".irsync-snap-", dir=target.parent)
+    fd, tmpname = tempfile.mkstemp(prefix=SNAPSHOT_TEMPFILE_PREFIX, dir=target.parent)
     os.close(fd)
     tmp_path = Path(tmpname)
     try:
