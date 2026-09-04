@@ -49,9 +49,12 @@ def subprocess_pythonpath() -> str:
 
     A subprocess inherits neither pytest's `pythonpath` setting nor pixi's
     activation environment, so point it at the same source trees this test
-    process imported from. drivecfg is listed explicitly because until it is
-    published to PyPI it is only importable via the local-development path
-    shim, not from site-packages.
+    process imported from — for irsync that is the repo's `src/`, which is
+    on sys.path only because of pytest's `pythonpath` setting. drivecfg is
+    listed alongside it so the child imports whichever drivecfg this process
+    did: normally the installed PyPI package (already importable, so the
+    entry is a harmless duplicate), but a local editable checkout when a
+    developer is testing an unreleased drivecfg against irsync.
     """
     import drivecfg
 
