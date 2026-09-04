@@ -17,7 +17,6 @@ so failures are reproducible.
 
 from __future__ import annotations
 
-import argparse
 import logging
 import os
 import random
@@ -35,6 +34,7 @@ from irsync.snapshot import (
     SNAPSHOT_TEMPFILE_PREFIX,
 )
 
+from .conftest import cli_args as _args
 from .conftest import inode_for
 
 logger = logging.getLogger(__name__)
@@ -305,27 +305,6 @@ def _signature_excluding_internal(
                 data = full.read_bytes()
                 sig[rel] = ("file", len(data), data)
     return sig
-
-
-def _args(**overrides: object) -> argparse.Namespace:
-    defaults: dict[str, object] = dict(
-        ssh_port=None,
-        ssh_key=None,
-        no_exclude=False,
-        yes=True,
-        force=False,
-        no_snapshot=False,
-        snapshot_only=False,
-        dry_run=False,
-        debug=False,
-        allow_unmounted=False,
-        require_mount=False,
-        allow_nonempty_dest=False,
-        allow_massive_delete=False,
-        allow_empty_source=False,
-    )
-    defaults.update(overrides)
-    return argparse.Namespace(**defaults)
 
 
 class TestEndToEndIntegration:

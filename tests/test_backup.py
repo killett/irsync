@@ -1,6 +1,5 @@
 """End-to-end orchestration tests for irsync.run_backup."""
 
-import argparse
 import logging
 import os
 import shutil
@@ -19,6 +18,7 @@ from irsync.backup import (
 from irsync.diff import Changes
 from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME, snapshot_tree
 
+from .conftest import cli_args as _args
 from .conftest import inode_for, tree_signature
 
 _INTERNAL_FILES = {SNAPSHOT_FILENAME, LOCKFILE_NAME}
@@ -56,27 +56,6 @@ class TestFormatPreview:
         assert "docs/report.md" in text
         assert "src/app.py" in text
         assert "Modified" in text
-
-
-def _args(**overrides):
-    defaults = dict(
-        ssh_port=None,
-        ssh_key=None,
-        no_exclude=False,
-        yes=True,
-        force=False,
-        no_snapshot=False,
-        snapshot_only=False,
-        dry_run=False,
-        debug=False,
-        allow_unmounted=False,
-        require_mount=False,
-        allow_nonempty_dest=False,
-        allow_massive_delete=False,
-        allow_empty_source=False,
-    )
-    defaults.update(overrides)
-    return argparse.Namespace(**defaults)
 
 
 @pytest.fixture

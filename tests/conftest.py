@@ -1,5 +1,6 @@
 """Shared fixtures: random trees, options builders, etc."""
 
+import argparse
 import os
 import random
 from collections.abc import Sequence
@@ -60,6 +61,41 @@ def subprocess_pythonpath() -> str:
         str(Path(str(module.__file__)).resolve().parent.parent)
         for module in (irsync, drivecfg)
     )
+
+
+def cli_args(**overrides: object) -> argparse.Namespace:
+    """Return the argparse Namespace a backup call expects, with overrides applied.
+
+    This mirrors the flag surface of :func:`irsync.cli._build_parser`, so it
+    lives here rather than in each test module: a new CLI flag that
+    ``backup.py`` reads has to be added in exactly one place, instead of
+    leaving whichever copy was missed to fail with an AttributeError.
+
+    Args:
+        **overrides: Flag values to change from their defaults. ``yes`` is
+            True by default so tests never block on the confirmation prompt.
+
+    Returns:
+        A Namespace with every attribute the orchestrator reads.
+    """
+    defaults: dict[str, object] = dict(
+        ssh_port=None,
+        ssh_key=None,
+        no_exclude=False,
+        yes=True,
+        force=False,
+        no_snapshot=False,
+        snapshot_only=False,
+        dry_run=False,
+        debug=False,
+        allow_unmounted=False,
+        require_mount=False,
+        allow_nonempty_dest=False,
+        allow_massive_delete=False,
+        allow_empty_source=False,
+    )
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
 
 
 def write_drive_config(
