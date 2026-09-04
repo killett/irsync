@@ -366,3 +366,153 @@ what the tests actually pin down before removing them.
 
 - The uncommitted `pixi.toml` / `pixi.lock` dependency additions noted in the
   2026-07-30 entry are still present and still untouched.
+
+## 2026-09-04 — whole-repo audit (mutation opted into)
+
+Baseline before any edit: `pixi run pre-commit run --all-files` green
+(`ruff`, `ruff-format`, `mypy` all pass), `322 passed, 1 skipped`. After:
+same gate green, same `322 passed, 1 skipped` — every change in this pass is
+strictly behavior-preserving, and no test was added or removed.
+
+Scope was whole-repo, which defaults to audit-only; the project owner opted
+in to mutation. The owner also asked that the long-standing uncommitted
+`pixi.toml` / `pixi.lock` dependency additions (noted as untouched in both
+the 2026-07-30 and 2026-08-01 entries) be committed first — they landed as
+`b5cfb63`, ahead of the pass proper, and are not part of it.
+
+### Applied
+
+- `988c690` `refactor: name the snapshot tempfile prefix at the one place
+  that writes it` — `_atomic_write_snapshot` passed the literal
+  `".irsync-snap-"` to `tempfile.mkstemp` while every *consumer* of that
+  prefix matches against `SNAPSHOT_TEMPFILE_PREFIX`, which `backup.py`
+  already imports: `_cleanup_orphan_tempfiles`, `snapshot_tree`'s
+  reserved-name skip, and `build_rsync_command`'s anchored `--exclude`. Same
+  string today, so nothing observable changes; the point is that the
+  reserved namespace is one decision and the only *writer* of it was the one
+  place not referring to the constant.
+
+- `9c444fb` `refactor: share the one _args CLI-namespace factory from
+  conftest` — `test_backup.py` and `test_integration.py` each carried a
+  byte-identical 14-key `argparse.Namespace` factory (they differed only in
+  type annotations) behind 94 call sites. Now `conftest.cli_args`, imported
+  as `from .conftest import cli_args as _args` in both so no call site
+  moves. This one qualifies under the DRY rule the earlier entries apply
+  strictly: it is not textual similarity but a mirror of
+  `cli._build_parser`'s flag surface, and a new flag that `backup.py` reads
+  had to be added to both copies or the missed one fails with
+  `AttributeError`. Same reason to change, changing together.
+
+- `ba0e34f` `docs: correct subprocess_pythonpath's stale reason for listing
+  drivecfg` and the `PROGRESS.md` gotcha fixed in the same pass — both still
+  described `drivecfg` as importable only through a temporary
+  `PYTHONPATH=../drivecfg/src` shim, with the gotcha instructing a future
+  session to "delete all three once the real dependency installs." `5b99aee`
+  deleted the shims and `drivecfg` 0.1.0 has been on PyPI since.
+  `README.md` and `RELEASING.md` were checked and were already correct, so
+  this was a two-file drift, not a repo-wide one.
+
+  **Third pass running, third stale cross-reference.** 2026-08-01 concluded
+  "prefer symbol references to line references"; the generalization this
+  pass adds is that the same drift hits *state* claims, not just locations.
+  A note that says "until X happens, Y is true" is a landmine the moment X
+  happens — the commit that makes X true is the one that has to sweep for
+  those notes, and `5b99aee` updated `README.md` and `RELEASING.md` but not
+  `PROGRESS.md` or the conftest docstring. When retiring a workaround, grep
+  for its distinctive strings (`drivecfg/src`, `PYTHONPATH`) across the
+  whole repo rather than the files you remember writing.
+
+### Deliberately kept
+
+Everything the 2026-07-30 and 2026-08-01 entries already settled was
+re-checked against the current code and left as those entries describe:
+`statx.is_available()` (still uncalled, still the natural home for the
+btime-diagnostic open item), the four near-identical `build_rsync_command`
+call sites, `NodeInfo["nlink"]`, `_cleanup_orphan_tempfiles`' discarded
+return, `index_by_inode`'s defensive `.get`, `_run_backup_for_endpoints`'
+length, and the two `--snapshot-only` duplications (snapshot-write sequence
+and shorthand resolution). Not re-litigated here.
+
+New to this pass:
+
+- **`_format_size`'s trailing `return f"{value:.1f} TiB"` is unreachable**
+  (`backup.py`) — the loop's `or unit == "TiB"` guarantees the last
+  iteration returns. It is already commented as existing to satisfy mypy's
+  no-implicit-return. Documented intent; kept.
+
+- **`_INTERNAL_FILES` is defined in both `test_backup.py` and
+  `test_integration.py`**, which looks like the `_args` duplication above
+  but is not the same case. The two predicates genuinely differ:
+  `test_integration`'s `_is_internal` compares a *basename* and also matches
+  `SNAPSHOT_TEMPFILE_PREFIX`, while `test_backup` compares whole relative
+  paths against the two-name set. Merging them would change what
+  `test_backup` filters out of its tree signatures, so it is not
+  behavior-preserving and does not belong in a hygiene pass. Kept.
+
+- **`ruff --select C901` reports six functions over the complexity
+  threshold** (`_run_backup_for_endpoints` 26, `plan_directory_moves` 19,
+  `cli.main` 15, `resolve_endpoints` 15, `run_real_sync` 14,
+  `snapshot_tree` 14). `C901` is not in the project's `select` list, so this
+  is not a gate failure — it was run only as an audit probe.
+  `_run_backup_for_endpoints` is covered by the 2026-07-30 decision; the
+  other five are cohesive single decisions (argument resolution, the
+  cycle-breaking scheduler, CLI dispatch, the rsync signal/cleanup ladder,
+  the explicit-stack walk) whose score is branch count, not tangling — and
+  two of them, `run_real_sync` and `snapshot_tree`, score high precisely
+  *because* of hard-won hazard fixes (7th-NEW-H2 / 8th-NEW-H2 / 8th-NEW-H3,
+  and 10th-F5) that a split would scatter. Kept, and C901 deliberately not
+  added to the lint config.
+
+### Reported, not fixed
+
+Per "bugs are separate," these were recorded as findings rather than folded
+into a hygiene commit. Both are also in `PROGRESS.md`'s Open questions.
+
+- **`plan_directory_moves`' `dfs` is recursive** (`diff.py`) — one Python
+  frame per link in a rename chain, so a diff containing ~1000+ *chained*
+  directory renames (`a`→`b`, `b`→`c`, …) raises `RecursionError` and kills
+  the run before rsync. This is precisely the failure 10th-F5 removed from
+  `snapshot_tree` by switching to an explicit stack; the same hazard is
+  still present in the other traversal. Not reproduced against real input —
+  it needs a synthetic chain that long — and fixing it changes behavior, so
+  it wants its own red/green test.
+
+- **The config-requirement rule is duplicated between `options.py` and
+  `cli.py`.** `needs_drive_config` is documented (in `PROGRESS.md`'s
+  gotcha) as "the single place the rule lives," but `cli.main` computes a
+  second predicate inline — the `optional = not required and
+  args.snapshot_only and ...` expression — for the "consult a config only
+  if one happens to exist" case. Adding an argument form means editing both.
+  A sibling predicate in `options.py` would fix it and would be
+  behavior-preserving if done exactly, but this is the newest and most
+  safety-relevant control flow in the codebase (it decides whether a run
+  consults a drive layout at all), so it deserves a deliberate change with
+  tests rather than a drive-by.
+
+### Environment observations
+
+- The audit probe `ruff --select ARG` reports 89 unused-argument hits, all
+  in `tests/`, and nearly all are pytest fixture parameters or
+  monkeypatch-lambda signatures that *must* accept arguments they ignore.
+  `ARG` is correctly absent from the project's `select` list; do not add it.
+
+- `cli.py`'s coverage number is still the subprocess artifact described in
+  the 2026-08-01 entry. Unchanged and still not worth "fixing."
+
+- **`PROGRESS.md` is gitignored and has never been committed.** `git add`
+  refuses it; `.gitignore:25` lists it next to `CLAUDE.md` under
+  "Local dev-process docs — intentionally not published", and
+  `git log -- PROGRESS.md` is empty. This is a documented decision, so this
+  pass left it alone — but it sits in direct tension with the project's own
+  durability rules ("Git is the source of truth, not the conversation";
+  "Refresh the next-action line and commit PROGRESS.md after each task"),
+  which cannot be followed for a file git will not accept. The practical
+  consequence is that PROGRESS.md — the file every session is told to read
+  first — survives only on the working disk, so a lost or re-cloned
+  workspace loses the entire notebook of decisions, gotchas, and open
+  questions. `docs/hygiene-notes.md`, `docs/design/`, `README.md` and
+  `RELEASING.md` are all tracked, so hygiene decisions specifically are
+  safe; the rest of PROGRESS.md is not. Resolving it (track it, or move its
+  durable sections into `docs/` and leave PROGRESS.md as a pure scratch
+  index) is the owner's call, since the repo is public and the file was
+  excluded on purpose.
