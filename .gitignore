@@ -22,4 +22,13 @@ htmlcov/
 
 # Local dev-process docs — intentionally not published (restored from backup)
 CLAUDE.md
-PROGRESS.md
+
+# Credential-hygiene notes and anything else too operational to publish.
+# PROGRESS.md is tracked and therefore public; this is where such notes go.
+SECURITY-TODO.local.md
+
+# PROGRESS.md was listed here too until 2026-09-04. It is now tracked: it is
+# the file the session-resume protocol tells every session to read first, and
+# leaving it untracked meant a re-cloned workspace lost the whole notebook of
+# decisions, gotchas, and open questions — and made the project's own
+# durability rule ("commit PROGRESS.md after each task") impossible to follow.

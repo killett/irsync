@@ -501,20 +501,33 @@ into a hygiene commit. Both are also in `PROGRESS.md`'s Open questions.
 - `cli.py`'s coverage number is still the subprocess artifact described in
   the 2026-08-01 entry. Unchanged and still not worth "fixing."
 
-- **`PROGRESS.md` is gitignored and has never been committed.** `git add`
-  refuses it; `.gitignore:25` lists it next to `CLAUDE.md` under
-  "Local dev-process docs — intentionally not published", and
-  `git log -- PROGRESS.md` is empty. This is a documented decision, so this
-  pass left it alone — but it sits in direct tension with the project's own
-  durability rules ("Git is the source of truth, not the conversation";
-  "Refresh the next-action line and commit PROGRESS.md after each task"),
-  which cannot be followed for a file git will not accept. The practical
-  consequence is that PROGRESS.md — the file every session is told to read
-  first — survives only on the working disk, so a lost or re-cloned
-  workspace loses the entire notebook of decisions, gotchas, and open
-  questions. `docs/hygiene-notes.md`, `docs/design/`, `README.md` and
-  `RELEASING.md` are all tracked, so hygiene decisions specifically are
-  safe; the rest of PROGRESS.md is not. Resolving it (track it, or move its
-  durable sections into `docs/` and leave PROGRESS.md as a pure scratch
-  index) is the owner's call, since the repo is public and the file was
-  excluded on purpose.
+- **`PROGRESS.md` was gitignored and had never been committed — now
+  resolved by tracking it.** The audit found `git add` refusing it:
+  `.gitignore` listed it beside `CLAUDE.md` under "Local dev-process docs —
+  intentionally not published", and `git log -- PROGRESS.md` was empty.
+  That was a documented decision, so the pass reported it rather than
+  overriding it; the project owner then chose to track the file. It sat in
+  direct tension with the project's own durability rules ("Git is the
+  source of truth, not the conversation"; "Refresh the next-action line and
+  commit PROGRESS.md after each task"), which cannot be followed for a file
+  git will not accept, and it meant the file every session is told to read
+  first survived only on the working disk — a re-cloned workspace lost the
+  entire notebook of decisions, gotchas, and open questions. `CLAUDE.md`
+  stays ignored; only PROGRESS.md was unlisted.
+
+  **One consequence to carry forward: PROGRESS.md is now public.** Before
+  tracking it, the file was scanned for credential-shaped strings, personal
+  paths, and email addresses; no secret value was ever in it. One Gotchas
+  entry did describe a credential-hygiene follow-up in more operational
+  detail than belongs in a published file, so at the owner's request it was
+  redacted down to the part that is genuinely a repo gotcha (an injected
+  `GH_TOKEN` can arrive without `workflow` scope, which blocks any push
+  touching `.github/workflows/`, and how to re-grant it). The full original
+  text moved to `SECURITY-TODO.local.md`, which `.gitignore` excludes, so
+  the reminder survives without being published. The redaction was done by
+  amending the commit that first added PROGRESS.md rather than by a
+  follow-up commit — nothing had been pushed, so the text never entered
+  reachable history at all. **Generalizable: the moment a local-only file
+  becomes tracked, re-read it as a stranger would.** Its whole prior life
+  was spent under the assumption that nobody outside the machine would see
+  it, and that assumption is written into the prose.
