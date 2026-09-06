@@ -31,5 +31,5 @@ jobs:
         with:
           name: dist
           path: dist/
-      # Pinned by commit SHA (v1.14.0) per supply-chain guidance; Dependabot bumps it.
+      # Pinned by commit SHA (v1.14.2) per supply-chain guidance; Dependabot bumps it.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
