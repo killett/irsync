@@ -32,3 +32,6 @@ SECURITY-TODO.local.md
 # leaving it untracked meant a re-cloned workspace lost the whole notebook of
 # decisions, gotchas, and open questions — and made the project's own
 # durability rule ("commit PROGRESS.md after each task") impossible to follow.
+
+# Local Claude Code hook config (PreCompact summarize-and-exit); dev-process only.
+.claude/
