@@ -26,14 +26,16 @@ class Options:
     Attributes:
         base_dir: Parent directory of every drive; the mount-gate root.
         drive_config: The loaded layout, or None for a plain-path run.
-        exclude_dirs: Directory names rsync is told to skip by default.
+        exclude_dirs: Names or rsync patterns skipped by default, at any
+            depth. ".Trash-*" covers every user's desktop trash
+            (freedesktop's ".Trash-$uid").
         max_errors: How many failures an ``ALL`` run tolerates before stopping.
     """
 
     base_dir: Path
     drive_config: DriveConfig | None = None
     exclude_dirs: list[str] = field(
-        default_factory=lambda: [".Trash-1000", ".cache", "unfinished_downloads"]
+        default_factory=lambda: [".Trash-*", ".cache", "unfinished_downloads"]
     )
     max_errors: int = 5
 

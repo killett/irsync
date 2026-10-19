@@ -2102,3 +2102,35 @@ class TestDiffSummaryLog:
         assert diff_lines == [
             "Diff: 0 dir moves, 0 file moves, 1 modified, 0 created, 0 deleted."
         ]
+
+
+class TestDefaultExcludes:
+    """The default exclude list must skip desktop trash for any user, not only uid 1000."""
+
+    @pytest.mark.parametrize("trash_dir", [".Trash-1000", ".Trash-1001"])
+    def test_default_run_does_not_back_up_trash(
+        self, tmp_path, basic_options, trash_dir
+    ):
+        # Behavior: a default run never transfers a freedesktop trash
+        # directory (.Trash-$uid), whatever the uid.
+        # Bug caught: the default hardcoded ".Trash-1000", so trash owned by
+        # any other uid (a second user, a removable drive used elsewhere)
+        # was backed up. The 1000 case guards the uid it always covered.
+        # Expected values: hand-built tree; keep.txt is the only real data.
+        src = tmp_path / "src"
+        dest = tmp_path / "dest"
+        (src / trash_dir / "files").mkdir(parents=True)
+        (src / trash_dir / "files" / "junk.txt").write_text("deleted stuff")
+        (src / "keep.txt").write_text("real data")
+        dest.mkdir()
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+
+        assert rc == 0
+        assert (dest / "keep.txt").read_text() == "real data"
+        assert not (dest / trash_dir).exists()
