@@ -162,15 +162,18 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 on success or when only help was shown;
-        :data:`~irsync.backup.EXIT_REFUSED` (2) for a refused or invalid
+        :data:`~irsync.backup.EXIT_REFUSED` (2) for a refused
         invocation; :data:`~irsync.backup.EXIT_LOCK_HELD` (75) when another
         run holds the lock; :data:`~irsync.backup.EXIT_ABORTED` (130) when
         the user declines; 1 when an ``ALL`` run had a failing drive;
         otherwise rsync's own exit code.
 
     Raises:
-        SystemExit: From argparse, for ``--help``, ``--version``, and
-            invalid flags.
+        SystemExit: From argparse, for ``--help``, ``--version`` and invalid
+            flags, and from :func:`main`'s own ``parser.error`` calls for
+            rejected flag combinations (e.g. ``--force`` with
+            ``--no-snapshot``, or ``ALL`` with a destination); all but
+            help/version exit 2.
     """
     from irsync.backup import EXIT_REFUSED, run_all_backups, run_backup
     from irsync.options import ALL_ARG, Options, needs_drive_config
