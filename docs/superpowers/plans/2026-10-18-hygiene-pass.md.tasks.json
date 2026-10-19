@@ -91,7 +91,7 @@
     {
       "id": 10,
       "subject": "Task 10: Document the orchestrator and CLI entry points",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `_run_backup_for_endpoints`, `_run_rsync_only`, and `_build_parser` have Google-style docstrings; `main` gains Args/Returns/Raises; `run_backup`'s Raises lists the `ValueError`/`FileNotFoundError`/`NotADirectoryError` that `run_all_backups` relies on.\n\n**Files:**\n- Modify: `src/irsync/backup.py` (`run_backup`, `_run_backup_for_endpoints`, `_run_rsync_only`)\n- Modify: `src/irsync/cli.py` (`_build_parser`, `main`)\n\n**Acceptance Criteria:**\n- [ ] The AST probe from the audit lists no module-level function without a docstring in `backup.py`/`cli.py`.\n- [ ] Docstrings only; no code change.\n\n**Verify:** `pixi run python -I -c \"import ast,pathlib;[print(f,n.name) for f in ('src/irsync/backup.py','src/irsync/cli.py') for n in ast.parse(pathlib.Path(f).read_text()).body if isinstance(n,ast.FunctionDef) and not ast.get_docstring(n)]\"` \u2192 no output\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"src/irsync/cli.py\"], \"verifyCommand\": \"pixi run python -I -c \\\"import ast,pathlib;[print(f,n.name) for f in ('src/irsync/backup.py','src/irsync/cli.py') for n in ast.parse(pathlib.Path(f).read_text()).body if isinstance(n,ast.FunctionDef) and not ast.get_docstring(n)]\\\"\", \"acceptanceCriteria\": [\"The AST probe from the audit lists no module-level function without a docstring in `backup.py`/`cli.py`.\", \"Docstrings only; no code change.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         9
@@ -118,7 +118,7 @@
     {
       "id": 13,
       "subject": "Task 13: Refresh the architecture doc's package-layout table",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The `src/irsync/` and `tests/` tables in `docs/design/irsync-architecture.md` match the code after mount-safety, drivecfg, and this pass.\n\n**Files:**\n- Modify: `docs/design/irsync-architecture.md` (section \"Package layout\")\n\n**Acceptance Criteria:**\n- [ ] A `preflight.py` row exists; the `options.py` row mentions `drivecfg`, `needs_drive_config`, `resolve_source` and no \"drive-letter map\"; the `cli.py` row describes lazy config loading and both parse-time rejections.\n- [ ] `snapshot.py` row mentions `ROW_TYPES`, `is_reserved_root_name`, `SnapshotCorrupt`; `backup.py` row mentions the refusal guards and `_emit_preview`.\n- [ ] The tests table lists `test_preflight.py` and `test_main.py`, and `conftest.py`'s row lists `make_tree`, `make_options`, `basic_options`, `write_drive_config`, `cli_args`, `subprocess_pythonpath`, `tree_signature`, `inode_for`.\n\n**Verify:** `rg -c 'preflight.py|test_main.py|drivecfg' docs/design/irsync-architecture.md` \u2192 \u2265 3\n\n```json:metadata\n{\"files\": [\"docs/design/irsync-architecture.md\"], \"verifyCommand\": \"rg -c 'preflight.py|test_main.py|drivecfg' docs/design/irsync-architecture.md\", \"acceptanceCriteria\": [\"A `preflight.py` row exists; the `options.py` row mentions `drivecfg`, `needs_drive_config`, `resolve_source` and no \\\"drive-letter map\\\"; the `cli.py` row describes lazy config loading and both parse-time rejections.\", \"`snapshot.py` row mentions `ROW_TYPES`, `is_reserved_root_name`, `SnapshotCorrupt`; `backup.py` row mentions the refusal guards and `_emit_preview`.\", \"The tests table lists `test_preflight.py` and `test_main.py`, and `conftest.py`'s row lists `make_tree`, `make_options`, `basic_options`, `write_drive_config`, `cli_args`, `subprocess_pythonpath`, `tree_signature`, `inode_for`.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         12
@@ -127,7 +127,7 @@
     {
       "id": 14,
       "subject": "Task 14: Record the drivecfg decision as AD-31",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The architecture doc, which claims to hold every decision, records where the drive layout comes from and when it is loaded.\n\n**Files:**\n- Modify: `docs/design/irsync-architecture.md` (new `### 31.` after `### 30.`)\n\n**Acceptance Criteria:**\n- [ ] `### 31.` exists, covering: layout from `drivecfg.DriveConfig`; `needs_drive_config`'s rules decided from argument text alone; shorthands fail closed with exit 2; `base_dir` default is only the mount-gate root; explicit config (presence, not truthiness) must exist; broken config always refuses; the known duplicated predicate in `cli.main`.\n\n**Verify:** `rg -n '^### 31\\.' docs/design/irsync-architecture.md` \u2192 one match\n\n```json:metadata\n{\"files\": [\"docs/design/irsync-architecture.md\"], \"verifyCommand\": \"rg -n '^### 31\\\\.' docs/design/irsync-architecture.md\", \"acceptanceCriteria\": [\"`### 31.` exists, covering: layout from `drivecfg.DriveConfig`; `needs_drive_config`'s rules decided from argument text alone; shorthands fail closed with exit 2; `base_dir` default is only the mount-gate root; explicit config (presence, not truthiness) must exist; broken config always refuses; the known duplicated predicate in `cli.main`.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         13
@@ -179,5 +179,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-19T18:47:13.685790+00:00"
+  "lastUpdated": "2026-10-19T19:11:05.012887+00:00"
 }

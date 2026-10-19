@@ -679,14 +679,14 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
 - Modify: `src/irsync/cli.py` (`_build_parser`, `main`)
 
 **Acceptance Criteria:**
-- [ ] The AST probe from the audit lists no module-level function without a docstring in `backup.py`/`cli.py`.
-- [ ] Docstrings only; no code change.
+- [x] The AST probe from the audit lists no module-level function without a docstring in `backup.py`/`cli.py`.
+- [x] Docstrings only; no code change.
 
 **Verify:** `pixi run python -I -c "import ast,pathlib;[print(f,n.name) for f in ('src/irsync/backup.py','src/irsync/cli.py') for n in ast.parse(pathlib.Path(f).read_text()).body if isinstance(n,ast.FunctionDef) and not ast.get_docstring(n)]"` → no output
 
 **Steps:**
 
-- [ ] **Step 1:** `_run_backup_for_endpoints`:
+- [x] **Step 1:** `_run_backup_for_endpoints`:
 
 ```python
     """Run the snapshot, diff, replay, rsync, persist pipeline for one pair.
@@ -716,7 +716,7 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
     """
 ```
 
-- [ ] **Step 2:** `_run_rsync_only`:
+- [x] **Step 2:** `_run_rsync_only`:
 
 ```python
     """Run rsync directly, with no snapshot layer.
@@ -740,7 +740,7 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
     """
 ```
 
-- [ ] **Step 3:** `run_backup`'s Raises: add, after `RsyncUnavailable`:
+- [x] **Step 3:** `run_backup`'s Raises: add, after `RsyncUnavailable`:
 
 ```
         ValueError: If the arguments cannot be resolved — an empty source,
@@ -754,7 +754,7 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
             skip in :func:`run_all_backups`.
 ```
 
-- [ ] **Step 4:** `cli._build_parser`: `"""Build the irsync argument parser.\n\n    Returns:\n        The parser :func:`main` uses; built separately so tests can inspect\n        its help text without running a backup.\n    """`. `cli.main`:
+- [x] **Step 4:** `cli._build_parser`: `"""Build the irsync argument parser.\n\n    Returns:\n        The parser :func:`main` uses; built separately so tests can inspect\n        its help text without running a backup.\n    """`. `cli.main`:
 
 ```python
     """CLI entry point. Returns the process exit code.
@@ -776,7 +776,7 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
     """
 ```
 
-- [ ] **Step 5:** Gate, then commit `docs: document the orchestrator and CLI entry points`.
+- [x] **Step 5:** Gate, then commit `docs: document the orchestrator and CLI entry points`.
 
 ### Task 11: Replace plan-relative references in code comments
 
@@ -824,17 +824,17 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
 - Modify: `docs/design/irsync-architecture.md` (section "Package layout")
 
 **Acceptance Criteria:**
-- [ ] A `preflight.py` row exists; the `options.py` row mentions `drivecfg`, `needs_drive_config`, `resolve_source` and no "drive-letter map"; the `cli.py` row describes lazy config loading and both parse-time rejections.
-- [ ] `snapshot.py` row mentions `ROW_TYPES`, `is_reserved_root_name`, `SnapshotCorrupt`; `backup.py` row mentions the refusal guards and `_emit_preview`.
-- [ ] The tests table lists `test_preflight.py` and `test_main.py`, and `conftest.py`'s row lists `make_tree`, `make_options`, `basic_options`, `write_drive_config`, `cli_args`, `subprocess_pythonpath`, `tree_signature`, `inode_for`.
+- [x] A `preflight.py` row exists; the `options.py` row mentions `drivecfg`, `needs_drive_config`, `resolve_source` and no "drive-letter map"; the `cli.py` row describes lazy config loading and both parse-time rejections.
+- [x] `snapshot.py` row mentions `ROW_TYPES`, `is_reserved_root_name`, `SnapshotCorrupt`; `backup.py` row mentions the refusal guards and `_emit_preview`.
+- [x] The tests table lists `test_preflight.py` and `test_main.py`, and `conftest.py`'s row lists `make_tree`, `make_options`, `basic_options`, `write_drive_config`, `cli_args`, `subprocess_pythonpath`, `tree_signature`, `inode_for`.
 
 **Verify:** `rg -c 'preflight.py|test_main.py|drivecfg' docs/design/irsync-architecture.md` → ≥ 3
 
 **Steps:**
 
-- [ ] **Step 1:** Rewrite the `cli.py`, `options.py`, `snapshot.py`, `backup.py` rows and add a `preflight.py` row, using the wording in the audit's doc-drift finding and the current code (read each module's top-level names before writing).
-- [ ] **Step 2:** Update the tests table (add the two files, fix the `conftest.py` and `test_options.py` rows; `test_cli.py` row: end-to-end `python -m irsync` runs plus in-process `main` calls covering flag validation, lazy config loading, and help text). Leave the dated "Total: 168 tests (as of the pass-10 migration ...)" sentence — it is self-dated.
-- [ ] **Step 3:** Gate, then commit `docs: bring the architecture doc's package tables up to date`.
+- [x] **Step 1:** Rewrite the `cli.py`, `options.py`, `snapshot.py`, `backup.py` rows and add a `preflight.py` row, using the wording in the audit's doc-drift finding and the current code (read each module's top-level names before writing).
+- [x] **Step 2:** Update the tests table (add the two files, fix the `conftest.py` and `test_options.py` rows; `test_cli.py` row: end-to-end `python -m irsync` runs plus in-process `main` calls covering flag validation, lazy config loading, and help text). Leave the dated "Total: 168 tests (as of the pass-10 migration ...)" sentence — it is self-dated.
+- [x] **Step 3:** Gate, then commit `docs: bring the architecture doc's package tables up to date`.
 
 ### Task 14: Record the drivecfg decision as AD-31
 
@@ -844,13 +844,13 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
 - Modify: `docs/design/irsync-architecture.md` (new `### 31.` after `### 30.`)
 
 **Acceptance Criteria:**
-- [ ] `### 31.` exists, covering: layout from `drivecfg.DriveConfig`; `needs_drive_config`'s rules decided from argument text alone; shorthands fail closed with exit 2; `base_dir` default is only the mount-gate root; explicit config (presence, not truthiness) must exist; broken config always refuses; the known duplicated predicate in `cli.main`.
+- [x] `### 31.` exists, covering: layout from `drivecfg.DriveConfig`; `needs_drive_config`'s rules decided from argument text alone; shorthands fail closed with exit 2; `base_dir` default is only the mount-gate root; explicit config (presence, not truthiness) must exist; broken config always refuses; the known duplicated predicate in `cli.main`.
 
 **Verify:** `rg -n '^### 31\.' docs/design/irsync-architecture.md` → one match
 
 **Steps:**
 
-- [ ] **Step 1:** Add:
+- [x] **Step 1:** Add:
 
 ```markdown
 ### 31. The drive layout comes from drivecfg, loaded only when the arguments need it
@@ -880,7 +880,7 @@ refuses. Known wart: `cli.main` computes a second, inline predicate for the
 questions).
 ```
 
-- [ ] **Step 2:** Gate, then commit `docs: record the drivecfg layout decision as AD-31`.
+- [x] **Step 2:** Gate, then commit `docs: record the drivecfg layout decision as AD-31`.
 
 ### Task 15: One line per AD in PROGRESS.md, through AD-31
 
