@@ -28,6 +28,17 @@ class SnapshotMismatch(Exception):
     """Raised when a snapshot's recorded source root doesn't match the caller's."""
 
 
+class SnapshotCorrupt(ValueError):
+    """Raised when a snapshot file cannot be read as a valid snapshot.
+
+    A malformed line, a row missing a required key, or an unknown type tag.
+    The snapshot is refused whole (7th-M2) rather than partially trusted. A
+    :class:`ValueError` subclass, so a caller that treats malformed input as
+    a refusal (``cli.main``'s boundary) still handles it if nothing closer
+    does.
+    """
+
+
 class Header(TypedDict):
     """Provenance metadata stored as the first line of a snapshot file."""
 
@@ -121,7 +132,8 @@ def snapshot_tree(
         A list of :class:`Row` records, one per included entry.
 
     Raises:
-        SystemExit: If ``root`` does not exist or is not a directory.
+        FileNotFoundError: If ``root`` does not exist.
+        NotADirectoryError: If ``root`` exists but is not a directory.
     """
     root = root.resolve()
     rows: list[Row] = []
@@ -130,9 +142,9 @@ def snapshot_tree(
     try:
         st_root = root.lstat()
     except FileNotFoundError as e:
-        raise SystemExit(f"Root path does not exist: {root}") from e
+        raise FileNotFoundError(f"Root path does not exist: {root}") from e
     if not stat.S_ISDIR(st_root.st_mode):
-        raise SystemExit(f"Root path is not a directory: {root}")
+        raise NotADirectoryError(f"Root path is not a directory: {root}")
 
     root_dev = st_root.st_dev
 
@@ -286,7 +298,8 @@ def read_snapshot(
 
     Raises:
         SnapshotMismatch: If the header's source root doesn't match.
-        SystemExit: If a row is malformed.
+        SnapshotCorrupt: If a line is not valid JSON, a row lacks a required
+            key, or a row has an unknown type tag.
     """
     # 10th-F4: stream line by line instead of read_text + split("\n"). The
     # old approach materialized the whole file as one str plus a list of
@@ -311,7 +324,9 @@ def read_snapshot(
         try:
             first = json.loads(first_line)
         except json.JSONDecodeError as e:
-            raise SystemExit(f"Malformed JSONL at {file}:{first_lineno}: {e}") from e
+            raise SnapshotCorrupt(
+                f"Malformed JSONL at {file}:{first_lineno}: {e}"
+            ) from e
 
         if isinstance(first, dict) and "_meta" in first:
             meta = first["_meta"]
@@ -337,7 +352,7 @@ def read_snapshot(
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError as e:
-                raise SystemExit(f"Malformed JSONL at {file}:{ln}: {e}") from e
+                raise SnapshotCorrupt(f"Malformed JSONL at {file}:{ln}: {e}") from e
             rows.append(_validate_row(obj, file, ln))
     return header, rows
 
@@ -346,18 +361,18 @@ def _validate_row(obj: dict[str, object], file: Path, lineno: int) -> Row:
     """Validate a parsed row dict and apply legacy-snapshot defaults.
 
     Applied to every row :func:`read_snapshot` parses, headered or legacy
-    headerless. Raises :class:`SystemExit` with a precise location on
+    headerless. Raises :class:`SnapshotCorrupt` with a precise location on
     missing keys or an invalid type tag (7th-M2).
     """
     for k in ("dev", "ino", "type", "nlink", "size", "path"):
         if k not in obj:
-            raise SystemExit(f"Missing key '{k}' in {file}:{lineno}")
+            raise SnapshotCorrupt(f"Missing key '{k}' in {file}:{lineno}")
     if obj["type"] not in ROW_TYPES:
         # 7th-M2: corrupted rows with unknown types were silently kept
         # and later filtered out by compute_changes' type whitelist,
         # hiding inode-level corruption. Refuse the whole snapshot.
         expected = ", ".join(repr(t) for t in ROW_TYPES)
-        raise SystemExit(
+        raise SnapshotCorrupt(
             f"Invalid type {obj['type']!r} in {file}:{lineno} "
             f"(expected one of {expected})"
         )

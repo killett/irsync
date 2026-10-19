@@ -1,9 +1,11 @@
 """End-to-end orchestration tests for irsync.run_backup."""
 
+import json
 import logging
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -2134,3 +2136,84 @@ class TestDefaultExcludes:
         assert rc == 0
         assert (dest / "keep.txt").read_text() == "real data"
         assert not (dest / trash_dir).exists()
+
+
+class TestCorruptSnapshotRefusesOnlyThatDrive:
+    """A corrupt baseline refuses its own run; it must not take down an ALL batch."""
+
+    @staticmethod
+    def _corrupt_snapshot(src: Path) -> Path:
+        """Write a snapshot whose header is valid and whose line 2 is not JSON."""
+        snap = src / SNAPSHOT_FILENAME
+        header = json.dumps(
+            {
+                "_meta": {
+                    "source_root": str(src.resolve()),
+                    "irsync_version": "x",
+                    "created_at_utc": "x",
+                }
+            }
+        )
+        snap.write_text(header + "\nTHIS IS NOT JSON\n", encoding="utf-8")
+        return snap
+
+    def test_single_run_refuses_without_touching_destination(
+        self, src_dest, basic_options, monkeypatch, caplog
+    ):
+        # Behavior: a corrupt baseline is a logged refusal (exit 2); nothing
+        # is transferred and the corrupt file is kept for the user.
+        # Bug caught: read_snapshot raised SystemExit, which escaped as a
+        # bare stderr message with exit 1 — bypassing logging (a log-to-file
+        # cron run recorded nothing) and the refusal exit code.
+        src, dest = src_dest
+        snap = self._corrupt_snapshot(src)
+        corrupt_bytes = snap.read_bytes()
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        with caplog.at_level(logging.ERROR):
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert rc == EXIT_REFUSED
+        assert f"{snap.resolve()}:2:" in caplog.text
+        assert list(dest.iterdir()) == []
+        assert snap.read_bytes() == corrupt_bytes
+
+    def test_all_run_counts_it_as_an_error_and_continues(
+        self, make_options, monkeypatch, caplog
+    ):
+        # Behavior: in an ALL run, a drive with a corrupt baseline is one
+        # counted error; later drives are still backed up; exit 1.
+        # Bug caught: SystemExit is not an Exception, so it escaped
+        # run_all_backups' handlers and aborted the batch — C was never
+        # backed up and no summary was logged.
+        # Expected values: B is the only broken drive; C holds one file.
+        options = make_options(backup_order=["B", "C"])
+        base = options.base_dir
+        b_src, c_src = base / "B", base / "C"
+        for d in (b_src, base / "B_backup", c_src, base / "C_backup"):
+            d.mkdir()
+        (b_src / "b.txt").write_text("b")
+        (c_src / "c.txt").write_text("c")
+        self._corrupt_snapshot(b_src)
+        monkeypatch.setattr("os.path.ismount", lambda p: True)
+
+        with caplog.at_level(logging.INFO):
+            rc = run_all_backups(options=options, args=_args())
+
+        assert rc == 1
+        assert (base / "C_backup" / "c.txt").read_text() == "c"
+        assert list((base / "B_backup").iterdir()) == []
+        summary = next(
+            r.getMessage()
+            for r in caplog.records
+            if "missing/skipped" in r.getMessage()
+        )
+        assert "backed up=1 (C)" in summary
+        assert "errors=1" in summary

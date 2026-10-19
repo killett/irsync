@@ -33,6 +33,7 @@ from irsync.snapshot import (
     SNAPSHOT_FILENAME,
     SNAPSHOT_TEMPFILE_PREFIX,
     Row,
+    SnapshotCorrupt,
     SnapshotMismatch,
     read_snapshot,
     snapshot_tree,
@@ -606,6 +607,18 @@ def _run_backup_for_endpoints(
                 src_root,
                 e,
             )
+        except SnapshotCorrupt as e:
+            # 7th-M2 refuses a corrupt snapshot whole rather than diffing
+            # against part of it. Refuse THIS run with a logged message and
+            # a normal return code, so run_all_backups counts it as one
+            # drive's error and moves on instead of the whole batch dying.
+            logging.error(
+                "Refusing: %s. The snapshot cannot be used as a diff baseline; "
+                "move %s aside to treat the next run as a first backup.",
+                e,
+                before_path,
+            )
+            return EXIT_REFUSED
     else:
         logging.info("No prior snapshot; treating as first backup.")
 

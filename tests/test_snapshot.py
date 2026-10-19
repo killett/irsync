@@ -9,6 +9,7 @@ from irsync.snapshot import (
     LOCKFILE_NAME,
     SNAPSHOT_FILENAME,
     SNAPSHOT_TEMPFILE_PREFIX,
+    SnapshotCorrupt,
     SnapshotMismatch,
     read_snapshot,
     snapshot_tree,
@@ -135,8 +136,16 @@ class TestSnapshotTree:
         assert "link/inner.txt" not in paths
 
     def test_missing_root_raises(self, tmp_path):
-        with pytest.raises(SystemExit):
+        with pytest.raises(FileNotFoundError, match="does not exist"):
             snapshot_tree(tmp_path / "nope")
+
+    def test_root_that_is_a_file_raises_not_a_directory(self, tmp_path):
+        # Bug caught: the not-a-directory branch left raising SystemExit
+        # (a separate raise site from the missing-root one).
+        a_file = tmp_path / "plain.txt"
+        a_file.write_text("x")
+        with pytest.raises(NotADirectoryError, match="not a directory"):
+            snapshot_tree(a_file)
 
 
 class TestWriteReadRoundtrip:
@@ -159,7 +168,15 @@ class TestWriteReadRoundtrip:
         # itself a row and so goes straight through _validate_row.
         out = tmp_path / "bad.jsonl"
         out.write_text('{"dev":1,"ino":2}\n', encoding="utf-8")
-        with pytest.raises(SystemExit):
+        with pytest.raises(SnapshotCorrupt, match="Missing key 'type'"):
+            read_snapshot(out, expected_source_root=tmp_path)
+
+    def test_malformed_first_line_is_corrupt(self, tmp_path):
+        # Bug caught: the first-line parse (header or legacy row) is its own
+        # raise site; leaving it as SystemExit would still kill an ALL run.
+        out = tmp_path / "bad_first.jsonl"
+        out.write_text("{not json\n", encoding="utf-8")
+        with pytest.raises(SnapshotCorrupt, match=":1:"):
             read_snapshot(out, expected_source_root=tmp_path)
 
     def test_7th_m2_read_snapshot_rejects_invalid_type_value(self, tmp_path):
@@ -175,7 +192,7 @@ class TestWriteReadRoundtrip:
         )
         bad_row = '{"dev":1,"ino":2,"type":"q","nlink":1,"size":0,"path":"a","mtime_ns":0,"btime_ns":-1}\n'
         out.write_text(header_line + bad_row, encoding="utf-8")
-        with pytest.raises(SystemExit):
+        with pytest.raises(SnapshotCorrupt, match="Invalid type 'q'"):
             read_snapshot(out, expected_source_root=tmp_path)
 
 
@@ -315,7 +332,7 @@ class TestF4StreamingRead:
         )
         bad_row = "not json at all\n"
         out.write_text(header_line + good_row + bad_row, encoding="utf-8")
-        with pytest.raises(SystemExit, match=":3:"):
+        with pytest.raises(SnapshotCorrupt, match=":3:"):
             read_snapshot(out, expected_source_root=tmp_path)
 
 
