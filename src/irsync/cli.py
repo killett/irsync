@@ -35,7 +35,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "remote like host:/path. Every shorthand needs a drive config, "
             "and so does a bare path given without a DESTINATION (it must "
             "be checked against the config before it can be treated as a "
-            "plain path) — except under --snapshot-only, which uses a config "
+            "plain path), except under --snapshot-only, which uses a config "
             "if one exists and otherwise treats the path literally. A path "
             "given together with a DESTINATION never needs one."
         ),
