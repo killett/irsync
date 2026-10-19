@@ -81,6 +81,8 @@ def build_rsync_command(
     # to share the name. These three are irsync's reserved namespace at the
     # source root: the snapshot itself, the lockfile, and any orphan
     # tempfiles from a killed _atomic_write_snapshot.
+    # irsync.snapshot.is_reserved_root_name is the same namespace as a
+    # predicate; change both together.
     cmd.extend(["--exclude", f"/{SNAPSHOT_FILENAME}"])
     cmd.extend(["--exclude", f"/{LOCKFILE_NAME}"])
     cmd.extend(["--exclude", f"/{SNAPSHOT_TEMPFILE_PREFIX}*"])

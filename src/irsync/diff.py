@@ -88,6 +88,7 @@ def make_parent_substituter(
 
 
 def _identity_subst(p: str) -> str:
+    """Return ``p`` unchanged: the substituter used when there are no directory moves."""
     return p
 
 
