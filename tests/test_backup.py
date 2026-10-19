@@ -848,11 +848,11 @@ class TestSnapshotPersistedAfterRsyncSucceeds:
     def test_5th_snapshot_not_persisted_when_rsync_fails(
         self, src_dest, basic_options, monkeypatch
     ):
-        # Verifies AD-equivalent: backup.py:401-406 guarantees that
-        # _persist_snapshots runs only after rsync returns 0. If rsync
-        # fails, the on-disk source-side snapshot must remain the OLD
-        # baseline so the next run can still reconcile correctly.
-        # Until this test, this behavior was claimed but unverified.
+        # Verifies that _run_backup_for_endpoints calls _persist_snapshots
+        # only after run_real_sync returns 0. If rsync fails, the on-disk
+        # source-side snapshot must remain the OLD baseline so the next run
+        # can still reconcile correctly. Until this test, this behavior was
+        # claimed but unverified.
         src, dest = src_dest
         # First (successful) backup writes a baseline snapshot.
         run_backup(
@@ -1083,8 +1083,8 @@ class TestNoSnapshotDryRunHonored:
     and call ``run_real_sync`` — ``args.dry_run`` was never consulted on
     this path, so ``--no-snapshot --dry-run`` deleted anything at the
     destination not present on the source. The snapshot path already
-    honored ``--dry-run`` correctly (``backup.py:696``); this brings the
-    two paths in line.
+    honored ``--dry-run`` correctly (the ``if args.dry_run:`` block in
+    ``_run_backup_for_endpoints``); this brings the two paths in line.
 
     ``test_dry_run_leaves_destination_untouched`` deliberately does not
     monkeypatch ``run_dry_run``/``run_real_sync``: it runs the real rsync
@@ -1163,10 +1163,10 @@ class TestRunAllBackups:
     def test_missing_drive_is_skipped_without_failing_the_run(
         self, make_options, monkeypatch, caplog
     ):
-        # Most of the 16 configured entries are external drives that are not
-        # mounted on any given day, so "drive absent" is the normal case for
-        # an ALL run. Exiting non-zero here would make every nightly ALL run
-        # look like a failure.
+        # Most entries in a configured backup order are external drives that
+        # are not mounted on any given day, so "drive absent" is the normal
+        # case for an ALL run. Exiting non-zero here would make every nightly
+        # ALL run look like a failure.
         def fake_backup(*, source_arg, destination_arg, options, args):
             if source_arg == "C":
                 raise FileNotFoundError(f"Path '{source_arg}' does not exist.")

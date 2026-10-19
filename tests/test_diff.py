@@ -403,7 +403,7 @@ class TestComputeChanges:
         # NEW-H4 defensive code: an inode that's type "f" in before and
         # type "d" in after at the same path. Physically impossible IRL
         # (changing inode type requires unlink+creat which gets a new
-        # inode), but the code at diff.py:154-161 defensively logs a
+        # inode), but compute_moves' type-change branch defensively logs a
         # warning and `continue`s in compute_moves WITHOUT adding to
         # consumed. Then compute_changes' shared-loop sees same path on
         # both sides → only_in_before / only_in_after empty → and the
