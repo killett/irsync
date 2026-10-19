@@ -684,8 +684,9 @@ AD, update those two places in the same commit.
 ### Applied
 
 Task numbers are those of `docs/superpowers/plans/2026-10-18-hygiene-pass.md`.
-Every commit below is on branch `hygiene-2026-10-18`, which branched from
-`main` at `eed5237`; one task is one commit unless the line lists more.
+Every commit below was made on branch `hygiene-2026-10-18`, which branched
+from `main` at `eed5237` and was fast-forwarded into `main` on 2026-10-19;
+one task is one commit unless the line lists more.
 
 - Task 0, record the audit: `e189eaa` "docs: record the 2026-10-18 hygiene
   audit and its plan"; review fix round `5f06690` "docs: mark plan Task 0
@@ -845,4 +846,6 @@ They are the first four Open questions in `PROGRESS.md`.
 
 ### Status
 
-Complete on branch `hygiene-2026-10-18`; merging is the owner's decision.
+Complete. The owner chose a local merge: `main` was fast-forwarded to the
+branch tip (`f0a0478`) on 2026-10-19, the gate passed on the merged result
+(pre-commit clean, 337 passed), and the branch was deleted. Not yet pushed.
