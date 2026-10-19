@@ -10,7 +10,7 @@
     {
       "id": 1,
       "subject": "Task 1: Use stat.S_ISREG for the regular-file test",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `_file_type_char` tests for a regular file with `stat.S_ISREG(mode)` instead of the hand-written `(mode & 0o170000) == 0o100000`.\n\n**Files:**\n- Modify: `src/irsync/snapshot.py` (`_file_type_char`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n '0o170000|0o100000' src` returns nothing.\n- [ ] `pixi run test` count unchanged from baseline.\n\n**Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/snapshot.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q\", \"acceptanceCriteria\": [\"`rg -n '0o170000|0o100000' src` returns nothing.\", \"`pixi run test` count unchanged from baseline.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         0
@@ -19,7 +19,7 @@
     {
       "id": 2,
       "subject": "Task 2: Use ALL_ARG in cli.main",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `cli.main` compares the source argument against `options.ALL_ARG` instead of a second `\"ALL\"` literal.\n\n**Files:**\n- Modify: `src/irsync/cli.py` (`main`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n '== \"ALL\"' src` returns nothing.\n- [ ] User-facing strings mentioning `'ALL'` (help text, the `parser.error` message) are unchanged.\n\n**Verify:** `pixi run python -m pytest tests/test_cli.py tests/test_options.py -q` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/cli.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_cli.py tests/test_options.py -q\", \"acceptanceCriteria\": [\"`rg -n '== \\\"ALL\\\"' src` returns nothing.\", \"User-facing strings mentioning `'ALL'` (help text, the `parser.error` message) are unchanged.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         1
@@ -179,5 +179,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-19T17:48:51.123514+00:00"
+  "lastUpdated": "2026-10-19T17:55:55.616726+00:00"
 }

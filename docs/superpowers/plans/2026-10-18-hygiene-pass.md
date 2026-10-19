@@ -77,14 +77,14 @@ git commit -m "docs: record the 2026-10-18 hygiene audit and its plan"
 - Modify: `src/irsync/snapshot.py` (`_file_type_char`)
 
 **Acceptance Criteria:**
-- [ ] `rg -n '0o170000|0o100000' src` returns nothing.
-- [ ] `pixi run test` count unchanged from baseline.
+- [x] `rg -n '0o170000|0o100000' src` returns nothing.
+- [x] `pixi run test` count unchanged from baseline.
 
 **Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q` → all pass
 
 **Steps:**
 
-- [ ] **Step 1:** In `_file_type_char`, replace
+- [x] **Step 1:** In `_file_type_char`, replace
 
 ```python
     if (mode & 0o170000) == 0o100000:
@@ -100,7 +100,7 @@ with
 
 (`stat` is already imported; `S_ISREG(m)` is defined as `S_IFMT(m) == S_IFREG`, i.e. exactly `(m & 0o170000) == 0o100000`.)
 
-- [ ] **Step 2:** Gate, then commit `refactor: test for regular files with stat.S_ISREG` (stage `src/irsync/snapshot.py`).
+- [x] **Step 2:** Gate, then commit `refactor: test for regular files with stat.S_ISREG` (stage `src/irsync/snapshot.py`).
 
 ### Task 2: Use ALL_ARG in cli.main
 
@@ -110,15 +110,15 @@ with
 - Modify: `src/irsync/cli.py` (`main`)
 
 **Acceptance Criteria:**
-- [ ] `rg -n '== "ALL"' src` returns nothing.
-- [ ] User-facing strings mentioning `'ALL'` (help text, the `parser.error` message) are unchanged.
+- [x] `rg -n '== "ALL"' src` returns nothing.
+- [x] User-facing strings mentioning `'ALL'` (help text, the `parser.error` message) are unchanged.
 
 **Verify:** `pixi run python -m pytest tests/test_cli.py tests/test_options.py -q` → all pass
 
 **Steps:**
 
-- [ ] **Step 1:** Change the import inside `main` to `from irsync.options import ALL_ARG, Options, needs_drive_config`, and change `if args.source_arg.strip().upper() == "ALL":` to `if args.source_arg.strip().upper() == ALL_ARG:`.
-- [ ] **Step 2:** Gate, then commit `refactor: compare against ALL_ARG instead of a second "ALL" literal`.
+- [x] **Step 1:** Change the import inside `main` to `from irsync.options import ALL_ARG, Options, needs_drive_config`, and change `if args.source_arg.strip().upper() == "ALL":` to `if args.source_arg.strip().upper() == ALL_ARG:`.
+- [x] **Step 2:** Gate, then commit `refactor: compare against ALL_ARG instead of a second "ALL" literal`.
 
 ### Task 3: One definition of the row type tags
 
