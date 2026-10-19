@@ -503,16 +503,16 @@ class TestDefaultExcludes:
 - Test: `tests/test_backup.py` (new class `TestCorruptSnapshotRefusesOnlyThatDrive`)
 
 **Acceptance Criteria:**
-- [ ] `rg -n 'SystemExit' src` matches only `rsync_runner.py`'s cleanup comment and `__main__.py`.
-- [ ] Single run with a corrupt snapshot: returns 2, logs an error naming the snapshot path and line, no rsync, dest unchanged, the corrupt file byte-identical.
-- [ ] `ALL` with a corrupt snapshot on B and a healthy C: returns 1, C is backed up, summary says `backed up=1 (C)` and `errors=1`.
-- [ ] Every new/changed test fails before the fix and passes after.
+- [x] `rg -n 'SystemExit' src` matches only `rsync_runner.py`'s cleanup comment and `__main__.py`.
+- [x] Single run with a corrupt snapshot: returns 2, logs an error naming the snapshot path and line, no rsync, dest unchanged, the corrupt file byte-identical.
+- [x] `ALL` with a corrupt snapshot on B and a healthy C: returns 1, C is backed up, summary says `backed up=1 (C)` and `errors=1`.
+- [x] Every new/changed test fails before the fix and passes after.
 
 **Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_backup.py -q -k "Corrupt or rejects or missing_root or not_a_directory or malformed or corrupted"` → all pass
 
 **Steps:**
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
 
 In `tests/test_snapshot.py`, import `SnapshotCorrupt` from `irsync.snapshot` and change:
   - `test_missing_root_raises` → `with pytest.raises(FileNotFoundError, match="does not exist"):` (bug caught: a library raising `SystemExit` for a missing root).
@@ -628,8 +628,8 @@ class TestCorruptSnapshotRefusesOnlyThatDrive:
         assert "errors=1" in summary
 ```
 
-- [ ] **Step 2:** Run the Verify command → every changed/new test FAILS (they see `SystemExit`, or for the ALL test the batch aborts).
-- [ ] **Step 3: Implement.** In `snapshot.py` add after `SnapshotMismatch`:
+- [x] **Step 2:** Run the Verify command → every changed/new test FAILS (they see `SystemExit`, or for the ALL test the batch aborts).
+- [x] **Step 3: Implement.** In `snapshot.py` add after `SnapshotMismatch`:
 
 ```python
 class SnapshotCorrupt(ValueError):
@@ -662,9 +662,9 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
             return EXIT_REFUSED
 ```
 
-- [ ] **Step 4:** Re-run the Verify command → all PASS. Run the full suite.
-- [ ] **Step 5:** Repro by hand (the audit's scenario) and confirm exit 1 with C backed up and a summary line.
-- [ ] **Step 6:** Gate, then commit `fix: refuse a corrupt snapshot per drive instead of exiting the process`.
+- [x] **Step 4:** Re-run the Verify command → all PASS. Run the full suite.
+- [x] **Step 5:** Repro by hand (the audit's scenario) and confirm exit 1 with C backed up and a summary line.
+- [x] **Step 6:** Gate, then commit `fix: refuse a corrupt snapshot per drive instead of exiting the process`.
 
 ---
 

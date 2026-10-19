@@ -82,7 +82,7 @@
     {
       "id": 9,
       "subject": "Task 9: A corrupt snapshot refuses only its own drive",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** A malformed snapshot raises `SnapshotCorrupt` (not `SystemExit`); `_run_backup_for_endpoints` turns it into a logged refusal (exit 2) that leaves the destination and the corrupt file untouched; an `ALL` batch counts it as one error and continues. `snapshot_tree`'s missing/not-a-directory root raises `FileNotFoundError`/`NotADirectoryError`.\n\n**Files:**\n- Modify: `src/irsync/snapshot.py` (new `SnapshotCorrupt`; `read_snapshot`, `_validate_row`, `snapshot_tree` raises and docstrings)\n- Modify: `src/irsync/backup.py` (import `SnapshotCorrupt`; new `except` after `SnapshotMismatch` in `_run_backup_for_endpoints`)\n- Test: `tests/test_snapshot.py` (four `pytest.raises(SystemExit)` sites, plus two new tests)\n- Test: `tests/test_backup.py` (new class `TestCorruptSnapshotRefusesOnlyThatDrive`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'SystemExit' src` matches only `rsync_runner.py`'s cleanup comment and `__main__.py`.\n- [ ] Single run with a corrupt snapshot: returns 2, logs an error naming the snapshot path and line, no rsync, dest unchanged, the corrupt file byte-identical.\n- [ ] `ALL` with a corrupt snapshot on B and a healthy C: returns 1, C is backed up, summary says `backed up=1 (C)` and `errors=1`.\n- [ ] Every new/changed test fails before the fix and passes after.\n\n**Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_backup.py -q -k \"Corrupt or rejects or missing_root or not_a_directory or malformed or corrupted\"` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"src/irsync/snapshot.py\", \"tests/test_backup.py\", \"tests/test_snapshot.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_snapshot.py tests/test_backup.py -q -k \\\"Corrupt or rejects or missing_root or not_a_directory or malformed or corrupted\\\"\", \"acceptanceCriteria\": [\"`rg -n 'SystemExit' src` matches only `rsync_runner.py`'s cleanup comment and `__main__.py`.\", \"Single run with a corrupt snapshot: returns 2, logs an error naming the snapshot path and line, no rsync, dest unchanged, the corrupt file byte-identical.\", \"`ALL` with a corrupt snapshot on B and a healthy C: returns 1, C is backed up, summary says `backed up=1 (C)` and `errors=1`.\", \"Every new/changed test fails before the fix and passes after.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         8
@@ -179,5 +179,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-19T18:20:05.506188+00:00"
+  "lastUpdated": "2026-10-19T18:47:13.685790+00:00"
 }
