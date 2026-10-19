@@ -543,3 +543,16 @@ def test_missing_destination_for_plain_path_source_exits_cleanly(tmp_path):
     )
     assert result.returncode == 2
     assert "Traceback" not in result.stderr
+
+
+def test_source_help_names_the_snapshot_only_exception():
+    # Behavior: SOURCE's help says when a config is needed, including the
+    # one destination-less form that does not need one (--snapshot-only,
+    # needs_drive_config's last rule).
+    # Bug caught: the help said every bare path without a DESTINATION
+    # needs a config, sending a --snapshot-only user off to write a
+    # drives.toml they don't need.
+    from irsync.cli import _build_parser
+
+    source = next(a for a in _build_parser()._actions if a.dest == "source_arg")
+    assert "--snapshot-only" in " ".join(str(source.help).split())
