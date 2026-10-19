@@ -556,3 +556,14 @@ def test_source_help_names_the_snapshot_only_exception():
 
     source = next(a for a in _build_parser()._actions if a.dest == "source_arg")
     assert "--snapshot-only" in " ".join(str(source.help).split())
+
+
+def test_help_renders_on_an_ascii_only_stdout():
+    # Behavior: --help is pure ASCII, so it renders even where stdout's
+    # encoding is ASCII (PYTHONIOENCODING=ascii, some minimal cron setups).
+    # Bug caught: a non-ASCII character in any help string (an em dash in
+    # SOURCE's help did this once) makes `irsync --help` raise
+    # UnicodeEncodeError there.
+    from irsync.cli import _build_parser
+
+    assert _build_parser().format_help().isascii()
