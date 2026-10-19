@@ -100,7 +100,7 @@
     {
       "id": 11,
       "subject": "Task 11: Replace plan-relative references in code comments",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Four comments that point at plan/branch context a reader cannot find from the code say what they mean instead.\n\n**Files:**\n- Modify: `src/irsync/options.py` (`needs_drive_config` docstring, \"decision 1\")\n- Modify: `src/irsync/backup.py` (`_format_first_run_preview` comment \"Task 3\"; destination-gate comment \"Rule 3\"; `run_all_backups` docstring \"this branch\")\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src` returns nothing.\n\n**Verify:** `rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src; echo \"exit=$?\"` \u2192 `exit=1`\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"src/irsync/options.py\"], \"verifyCommand\": \"rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src; echo \\\"exit=$?\\\"\", \"acceptanceCriteria\": [\"`rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src` returns nothing.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         10
@@ -109,7 +109,7 @@
     {
       "id": 12,
       "subject": "Task 12: Correct the ext4 btime condition in statx's docstri",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `statx.py` says ext4 lacks btime when its inodes are 128 bytes (no room for `i_crtime`; ext4 only reports it when the field fits in the inode), not \"without `-O extent`\".\n\n**Files:**\n- Modify: `src/irsync/statx.py` (module docstring, \"Fallback behaviour\")\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'extent' src/irsync/statx.py` returns nothing; the text names 128-byte inodes.\n\n**Verify:** `rg -n '128-byte' src/irsync/statx.py` \u2192 one match\n\n```json:metadata\n{\"files\": [\"src/irsync/statx.py\"], \"verifyCommand\": \"rg -n '128-byte' src/irsync/statx.py\", \"acceptanceCriteria\": [\"`rg -n 'extent' src/irsync/statx.py` returns nothing; the text names 128-byte inodes.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         11
@@ -136,7 +136,7 @@
     {
       "id": 15,
       "subject": "Task 15: One line per AD in PROGRESS.md, through AD-31",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `PROGRESS.md`'s Cross-cutting decisions renders one bullet per AD and covers AD-24 to AD-31.\n\n**Files:**\n- Modify: `PROGRESS.md` (Cross-cutting decisions; \"all 30 decisions\" \u2192 \"all 31\")\n\n**Acceptance Criteria:**\n- [ ] 31 lines start with `- **AD-`; no line holds two.\n- [ ] Current work says \"all 31 decisions\".\n\n**Verify:** `rg -c '^- \\*\\*AD-' PROGRESS.md` \u2192 `31`\n\n```json:metadata\n{\"files\": [\"PROGRESS.md\"], \"verifyCommand\": \"rg -c '^- \\\\*\\\\*AD-' PROGRESS.md\", \"acceptanceCriteria\": [\"31 lines start with `- **AD-`; no line holds two.\", \"Current work says \\\"all 31 decisions\\\".\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         14
@@ -145,7 +145,7 @@
     {
       "id": 16,
       "subject": "Task 16: Correct the 2026-07-31 hygiene-notes entry in place",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The entry's \"truncation branch is untested\" claim (false since `b342f60`) and its drifted `backup.py:NNN` references are corrected.\n\n**Files:**\n- Modify: `docs/hygiene-notes.md` (2026-07-31 entry only)\n\n**Acceptance Criteria:**\n- [ ] The truncation bullet is marked corrected, names `test_walk_reports_truncated_count_past_five_skipped_dirs` and `b342f60`, and keeps the still-true `include_other=True` + boundary gap.\n- [ ] `backup.py:665`, `backup.py:640`, `backup.py:557` no longer appear (the `backup.py:696` mention in the 2026-08-01 entry describes history and stays).\n\n**Verify:** `rg -n 'backup\\.py:(665|640|557)' docs/hygiene-notes.md; echo \"exit=$?\"` \u2192 `exit=1`\n\n```json:metadata\n{\"files\": [\"docs/hygiene-notes.md\"], \"verifyCommand\": \"rg -n 'backup\\\\.py:(665|640|557)' docs/hygiene-notes.md; echo \\\"exit=$?\\\"\", \"acceptanceCriteria\": [\"The truncation bullet is marked corrected, names `test_walk_reports_truncated_count_past_five_skipped_dirs` and `b342f60`, and keeps the still-true `include_other=True` + boundary gap.\", \"`backup.py:665`, `backup.py:640`, `backup.py:557` no longer appear (the `backup.py:696` mention in the 2026-08-01 entry describes history and stays).\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         15
@@ -154,7 +154,7 @@
     {
       "id": 17,
       "subject": "Task 17: Fix drifted references in test comments",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Test comments stop citing line numbers that moved and a \"16 configured entries\" layout that no longer exists.\n\n**Files:**\n- Modify: `tests/test_diff.py` (comment in `test_8th_type_change_at_same_path_does_not_silently_lose_path`)\n- Modify: `tests/test_backup.py` (comments in `test_5th_snapshot_not_persisted_when_rsync_fails`, `TestNoSnapshotDryRunHonored` docstring, `test_missing_drive_is_skipped_without_failing_the_run`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n '\\.py:\\d' tests` matches only the integration test's reference `test_backup.py:test_5th_m1_...` (a test name, not a line).\n- [ ] `rg -n '16 configured' tests` returns nothing.\n\n**Verify:** `rg -n '\\b(backup|diff)\\.py:\\d+' tests; echo \"exit=$?\"` \u2192 `exit=1`\n\n```json:metadata\n{\"files\": [\"tests/test_backup.py\", \"tests/test_diff.py\"], \"verifyCommand\": \"rg -n '\\\\b(backup|diff)\\\\.py:\\\\d+' tests; echo \\\"exit=$?\\\"\", \"acceptanceCriteria\": [\"`rg -n '\\\\.py:\\\\d' tests` matches only the integration test's reference `test_backup.py:test_5th_m1_...` (a test name, not a line).\", \"`rg -n '16 configured' tests` returns nothing.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         16
@@ -163,7 +163,7 @@
     {
       "id": 18,
       "subject": "Task 18: Bring RELEASING.md up to date",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** RELEASING.md stops presenting the done trusted-publisher setup as pending and stops describing a conda-forge feedstock that does not exist.\n\n**Files:**\n- Modify: `RELEASING.md` (sections \"One-time setup: PyPI Trusted Publisher\" and \"conda-forge\")\n\n**Acceptance Criteria:**\n- [ ] The trusted-publisher section says it was done on 2026-09-06 and later releases need no PyPI-side setup.\n- [ ] The conda-forge section says irsync is deliberately not on conda-forge because `drivecfg` isn't, and when to revisit.\n\n**Verify:** `rg -n '2026-09-06|not on conda-forge' RELEASING.md` \u2192 \u2265 2 matches\n\n```json:metadata\n{\"files\": [\"RELEASING.md\"], \"verifyCommand\": \"rg -n '2026-09-06|not on conda-forge' RELEASING.md\", \"acceptanceCriteria\": [\"The trusted-publisher section says it was done on 2026-09-06 and later releases need no PyPI-side setup.\", \"The conda-forge section says irsync is deliberately not on conda-forge because `drivecfg` isn't, and when to revisit.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         17
@@ -179,5 +179,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-19T19:11:05.012887+00:00"
+  "lastUpdated": "2026-10-19T19:26:03.162302+00:00"
 }

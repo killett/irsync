@@ -787,17 +787,17 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
 - Modify: `src/irsync/backup.py` (`_format_first_run_preview` comment "Task 3"; destination-gate comment "Rule 3"; `run_all_backups` docstring "this branch")
 
 **Acceptance Criteria:**
-- [ ] `rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src` returns nothing.
+- [x] `rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src` returns nothing.
 
 **Verify:** `rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src; echo "exit=$?"` → `exit=1`
 
 **Steps:**
 
-- [ ] **Step 1:** `options.py`: "That is the form decision 1 protects (``irsync SRC DEST``), and it also covers" → "That is the plain ``irsync SRC DEST`` form, which must keep working on a machine with no config file at all, and it also covers".
-- [ ] **Step 2:** `backup.py` `_format_first_run_preview`: "(Task 3 only counts a local dest's existing entries)" → "(the destination gate only lists a local destination's entries)".
-- [ ] **Step 3:** destination-gate comment: "the first-run preview (Rule 3) reports it" → "the first-run preview (``_format_first_run_preview``) reports it".
-- [ ] **Step 4:** `run_all_backups` docstring: "which is exactly the silent-success hazard this branch exists to close" → "which is exactly the silent success the destination mount gate exists to prevent (AD-29)".
-- [ ] **Step 5:** Gate, then commit `docs: replace plan-relative references with self-contained wording`.
+- [x] **Step 1:** `options.py`: "That is the form decision 1 protects (``irsync SRC DEST``), and it also covers" → "That is the plain ``irsync SRC DEST`` form, which must keep working on a machine with no config file at all, and it also covers".
+- [x] **Step 2:** `backup.py` `_format_first_run_preview`: "(Task 3 only counts a local dest's existing entries)" → "(the destination gate only lists a local destination's entries)".
+- [x] **Step 3:** destination-gate comment: "the first-run preview (Rule 3) reports it" → "the first-run preview (``_format_first_run_preview``) reports it".
+- [x] **Step 4:** `run_all_backups` docstring: "which is exactly the silent-success hazard this branch exists to close" → "which is exactly the silent success the destination mount gate exists to prevent (AD-29)".
+- [x] **Step 5:** Gate, then commit `docs: replace plan-relative references with self-contained wording`.
 
 ### Task 12: Correct the ext4 btime condition in statx's docstring
 
@@ -807,14 +807,14 @@ In `backup.py`, import `SnapshotCorrupt` and add after the `except SnapshotMisma
 - Modify: `src/irsync/statx.py` (module docstring, "Fallback behaviour")
 
 **Acceptance Criteria:**
-- [ ] `rg -n 'extent' src/irsync/statx.py` returns nothing; the text names 128-byte inodes.
+- [x] `rg -n 'extent' src/irsync/statx.py` returns nothing; the text names 128-byte inodes.
 
 **Verify:** `rg -n '128-byte' src/irsync/statx.py` → one match
 
 **Steps:**
 
-- [ ] **Step 1:** "filesystem doesn't report btime (older ext4 without ``-O extent``, FAT, NFSv3, etc.)" → "filesystem doesn't report btime (ext4 with 128-byte inodes — e.g. upgraded from ext3 — which have no room for the creation time; FAT; NFSv3; etc.)".
-- [ ] **Step 2:** Gate, then commit `docs: correct the ext4 condition for missing btime`.
+- [x] **Step 1:** "filesystem doesn't report btime (older ext4 without ``-O extent``, FAT, NFSv3, etc.)" → "filesystem doesn't report btime (ext4 with 128-byte inodes — e.g. upgraded from ext3 — which have no room for the creation time; FAT; NFSv3; etc.)".
+- [x] **Step 2:** Gate, then commit `docs: correct the ext4 condition for missing btime`.
 
 ### Task 13: Refresh the architecture doc's package-layout tables
 
@@ -890,14 +890,14 @@ questions).
 - Modify: `PROGRESS.md` (Cross-cutting decisions; "all 30 decisions" → "all 31")
 
 **Acceptance Criteria:**
-- [ ] 31 lines start with `- **AD-`; no line holds two.
-- [ ] Current work says "all 31 decisions".
+- [x] 31 lines start with `- **AD-`; no line holds two.
+- [x] Current work says "all 31 decisions".
 
 **Verify:** `rg -c '^- \*\*AD-' PROGRESS.md` → `31`
 
 **Steps:**
 
-- [ ] **Step 1:** Split the single AD line into 23 lines (text unchanged) and append:
+- [x] **Step 1:** Split the single AD line into 23 lines (text unchanged) and append:
 
 ```markdown
 - **AD-24** — Mount gate checks the first component below `base_dir` (never `base_dir` itself) and runs before the lock, so nothing is written to an unmounted source.
@@ -910,7 +910,7 @@ questions).
 - **AD-31** — Drive layout comes from drivecfg, loaded only when `needs_drive_config` says the arguments need it; every shorthand fails closed.
 ```
 
-- [ ] **Step 2:** Gate, then commit `docs: list one AD per line in PROGRESS.md, through AD-31`.
+- [x] **Step 2:** Gate, then commit `docs: list one AD per line in PROGRESS.md, through AD-31`.
 
 ### Task 16: Correct the 2026-07-31 hygiene-notes entry in place
 
@@ -920,14 +920,14 @@ questions).
 - Modify: `docs/hygiene-notes.md` (2026-07-31 entry only)
 
 **Acceptance Criteria:**
-- [ ] The truncation bullet is marked corrected, names `test_walk_reports_truncated_count_past_five_skipped_dirs` and `b342f60`, and keeps the still-true `include_other=True` + boundary gap.
-- [ ] `backup.py:665`, `backup.py:640`, `backup.py:557` no longer appear (the `backup.py:696` mention in the 2026-08-01 entry describes history and stays).
+- [x] The truncation bullet is marked corrected, names `test_walk_reports_truncated_count_past_five_skipped_dirs` and `b342f60`, and keeps the still-true `include_other=True` + boundary gap.
+- [x] `backup.py:665`, `backup.py:640`, `backup.py:557` no longer appear (the `backup.py:696` mention in the 2026-08-01 entry describes history and stays).
 
 **Verify:** `rg -n 'backup\.py:(665|640|557)' docs/hygiene-notes.md; echo "exit=$?"` → `exit=1`
 
 **Steps:**
 
-- [ ] **Step 1:** Replace the truncation bullet with:
+- [x] **Step 1:** Replace the truncation bullet with:
 
 ```markdown
 - ~~**The `(and N more)` truncation branch of the nested-mount warning** (more
@@ -938,8 +938,8 @@ questions).
   regression test.
 ```
 
-- [ ] **Step 2:** In the dry-run carve-out bullet drop "(`backup.py:665`)" and "(`backup.py:640`)"; in M2 change "at `backup.py:557`" to "in `_run_backup_for_endpoints`' `--no-snapshot` branch"; in M3 change "at `backup.py:665`" to "in `_run_backup_for_endpoints`".
-- [ ] **Step 3:** Gate, then commit `docs: correct the 2026-07-31 hygiene notes against the current code`.
+- [x] **Step 2:** In the dry-run carve-out bullet drop "(`backup.py:665`)" and "(`backup.py:640`)"; in M2 change "at `backup.py:557`" to "in `_run_backup_for_endpoints`' `--no-snapshot` branch"; in M3 change "at `backup.py:665`" to "in `_run_backup_for_endpoints`".
+- [x] **Step 3:** Gate, then commit `docs: correct the 2026-07-31 hygiene notes against the current code`.
 
 ### Task 17: Fix drifted references in test comments
 
@@ -950,16 +950,16 @@ questions).
 - Modify: `tests/test_backup.py` (comments in `test_5th_snapshot_not_persisted_when_rsync_fails`, `TestNoSnapshotDryRunHonored` docstring, `test_missing_drive_is_skipped_without_failing_the_run`)
 
 **Acceptance Criteria:**
-- [ ] `rg -n '\.py:\d' tests` matches only the integration test's reference `test_backup.py:test_5th_m1_...` (a test name, not a line).
-- [ ] `rg -n '16 configured' tests` returns nothing.
+- [x] `rg -n '\.py:\d' tests` matches only the integration test's reference `test_backup.py:test_5th_m1_...` (a test name, not a line).
+- [x] `rg -n '16 configured' tests` returns nothing.
 
 **Verify:** `rg -n '\b(backup|diff)\.py:\d+' tests; echo "exit=$?"` → `exit=1`
 
 **Steps:**
 
-- [ ] **Step 1:** `test_diff.py`: "the code at diff.py:154-161 defensively logs" → "compute_moves' type-change branch defensively logs".
-- [ ] **Step 2:** `test_backup.py`: "Verifies AD-equivalent: backup.py:401-406 guarantees that _persist_snapshots runs only after rsync returns 0." → "Verifies that _run_backup_for_endpoints calls _persist_snapshots only after run_real_sync returns 0."; "(``backup.py:696``)" → "(the ``if args.dry_run:`` block in ``_run_backup_for_endpoints``)"; "Most of the 16 configured entries are external drives" → "Most entries in a configured backup order are external drives".
-- [ ] **Step 3:** Gate, then commit `test: anchor drifted comment references to symbols`.
+- [x] **Step 1:** `test_diff.py`: "the code at diff.py:154-161 defensively logs" → "compute_moves' type-change branch defensively logs".
+- [x] **Step 2:** `test_backup.py`: "Verifies AD-equivalent: backup.py:401-406 guarantees that _persist_snapshots runs only after rsync returns 0." → "Verifies that _run_backup_for_endpoints calls _persist_snapshots only after run_real_sync returns 0."; "(``backup.py:696``)" → "(the ``if args.dry_run:`` block in ``_run_backup_for_endpoints``)"; "Most of the 16 configured entries are external drives" → "Most entries in a configured backup order are external drives".
+- [x] **Step 3:** Gate, then commit `test: anchor drifted comment references to symbols`.
 
 ### Task 18: Bring RELEASING.md up to date
 
@@ -969,16 +969,16 @@ questions).
 - Modify: `RELEASING.md` (sections "One-time setup: PyPI Trusted Publisher" and "conda-forge")
 
 **Acceptance Criteria:**
-- [ ] The trusted-publisher section says it was done on 2026-09-06 and later releases need no PyPI-side setup.
-- [ ] The conda-forge section says irsync is deliberately not on conda-forge because `drivecfg` isn't, and when to revisit.
+- [x] The trusted-publisher section says it was done on 2026-09-06 and later releases need no PyPI-side setup.
+- [x] The conda-forge section says irsync is deliberately not on conda-forge because `drivecfg` isn't, and when to revisit.
 
 **Verify:** `rg -n '2026-09-06|not on conda-forge' RELEASING.md` → ≥ 2 matches
 
 **Steps:**
 
-- [ ] **Step 1:** Heading → `## One-time setup: PyPI Trusted Publisher (done)`; first sentence → "Done on 2026-09-06, before v0.1.0: the trusted publisher is live, so later releases need no PyPI-side setup. Kept for reference (a fork, or a renamed project, would repeat it) — the registration used:"; keep the numbered list.
-- [ ] **Step 2:** Replace the conda-forge section body with: "irsync is deliberately not on conda-forge (decided 2026-09-06). It depends on `drivecfg`, which has no conda-forge package, so submitting irsync would also mean writing and co-maintaining a `drivecfg` recipe. Revisit once `drivecfg` is on conda-forge: the recipe then goes to [conda-forge/staged-recipes](https://github.com/conda-forge/staged-recipes), and once the feedstock exists its autotick bot opens a PR for each new PyPI version."
-- [ ] **Step 3:** Gate, then commit `docs: update RELEASING.md for the live publisher and the conda-forge decision`.
+- [x] **Step 1:** Heading → `## One-time setup: PyPI Trusted Publisher (done)`; first sentence → "Done on 2026-09-06, before v0.1.0: the trusted publisher is live, so later releases need no PyPI-side setup. Kept for reference (a fork, or a renamed project, would repeat it) — the registration used:"; keep the numbered list.
+- [x] **Step 2:** Replace the conda-forge section body with: "irsync is deliberately not on conda-forge (decided 2026-09-06). It depends on `drivecfg`, which has no conda-forge package, so submitting irsync would also mean writing and co-maintaining a `drivecfg` recipe. Revisit once `drivecfg` is on conda-forge: the recipe then goes to [conda-forge/staged-recipes](https://github.com/conda-forge/staged-recipes), and once the feedstock exists its autotick bot opens a PR for each new PyPI version."
+- [x] **Step 3:** Gate, then commit `docs: update RELEASING.md for the live publisher and the conda-forge decision`.
 
 ---
 
