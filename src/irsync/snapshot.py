@@ -51,6 +51,27 @@ class Row(TypedDict):
     path: str  # POSIX relative path from snapshot root
 
 
+def is_reserved_root_name(name: str) -> bool:
+    """Return True if ``name`` is one of irsync's own files at a tree root.
+
+    The reserved namespace (AD-5) is the snapshot, the lockfile, and any
+    snapshot tempfile a killed write left behind. Only entries directly at
+    the root are reserved, so callers pass a root-level entry's name.
+    rsync's anchored ``--exclude`` patterns in
+    :func:`irsync.rsync_runner.build_rsync_command` are the same namespace
+    in glob form and must change with this.
+
+    Args:
+        name: The name of an entry directly under the root (no ``/``).
+
+    Returns:
+        True if irsync owns that name at the root.
+    """
+    return name in (SNAPSHOT_FILENAME, LOCKFILE_NAME) or name.startswith(
+        SNAPSHOT_TEMPFILE_PREFIX
+    )
+
+
 def _crosses_boundary(*, entry_dev: int, root_dev: int, xdev: bool) -> bool:
     """Return True if this entry sits on another filesystem and will be skipped.
 
@@ -151,12 +172,10 @@ def snapshot_tree(
             # itself, the lockfile, and any orphan tempfiles from a killed
             # _atomic_write_snapshot. Subdirectory files with the same names
             # are still included (this is the H1/NEW-H2 anchored-exclude
-            # principle: only the root entries are reserved). Naturally
-            # limited to root since `relative_to(root)` of a subdir entry
-            # always contains "/".
-            if rel in (SNAPSHOT_FILENAME, LOCKFILE_NAME):
-                continue
-            if "/" not in rel and rel.startswith(SNAPSHOT_TEMPFILE_PREFIX):
+            # principle: only the root entries are reserved). The
+            # `"/" not in rel` test is what limits the skip to the root:
+            # `relative_to(root)` of a subdir entry always contains "/".
+            if "/" not in rel and is_reserved_root_name(rel):
                 continue
 
             is_dir = stat.S_ISDIR(st.st_mode)

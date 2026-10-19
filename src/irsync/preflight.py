@@ -132,11 +132,10 @@ def _non_reserved_names(root: Path) -> list[str]:
     """List ``root``'s top-level entries, excluding irsync's own reserved files.
 
     Shared by :func:`foreign_dest_entries` (destination side) and
-    :func:`source_root_is_empty` (source side) so the reserved-namespace
-    list — :data:`~irsync.snapshot.SNAPSHOT_FILENAME`,
-    :data:`~irsync.snapshot.LOCKFILE_NAME`,
-    :data:`~irsync.snapshot.SNAPSHOT_TEMPFILE_PREFIX` — is spelled out in
-    exactly one place rather than duplicated per caller.
+    :func:`source_root_is_empty` (source side). The reserved-name rule
+    itself is :func:`~irsync.snapshot.is_reserved_root_name`, the same
+    predicate the snapshot walk uses, so adding a reserved file is a
+    one-place change.
 
     Args:
         root: Directory to list.
@@ -151,19 +150,10 @@ def _non_reserved_names(root: Path) -> list[str]:
         NotADirectoryError: If ``root`` exists but is not a directory.
         PermissionError: If ``root`` exists but cannot be listed.
     """
-    from irsync.snapshot import (
-        LOCKFILE_NAME,
-        SNAPSHOT_FILENAME,
-        SNAPSHOT_TEMPFILE_PREFIX,
-    )
+    from irsync.snapshot import is_reserved_root_name
 
     names = sorted(p.name for p in root.iterdir())
-    return [
-        name
-        for name in names
-        if name not in (SNAPSHOT_FILENAME, LOCKFILE_NAME)
-        and not name.startswith(SNAPSHOT_TEMPFILE_PREFIX)
-    ]
+    return [name for name in names if not is_reserved_root_name(name)]
 
 
 def foreign_dest_entries(dest_root: Path) -> list[str]:
