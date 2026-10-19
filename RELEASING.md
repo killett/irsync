@@ -5,9 +5,11 @@ Releases are **tag-driven**. Pushing a `vX.Y.Z` tag to GitHub triggers
 them to PyPI via **Trusted Publishing** (OpenID Connect — no API tokens stored
 in the repo).
 
-## One-time setup: PyPI Trusted Publisher
+## One-time setup: PyPI Trusted Publisher (done)
 
-Before the first release, register this repo as a trusted publisher on PyPI:
+Done on 2026-09-06, before v0.1.0: the trusted publisher is live, so later
+releases need no PyPI-side setup. Kept for reference (a fork, or a renamed
+project, would repeat it) — the registration used:
 
 1. Go to <https://pypi.org/manage/account/publishing/> (PyPI account needs 2FA).
 2. Add a **pending publisher** with:
@@ -58,7 +60,10 @@ Never delete-and-reuse a version that shipped a file.
 
 ## conda-forge
 
-After the PyPI release, the conda-forge feedstock's autotick bot opens a PR for
-each new version; a maintainer just approves it. The initial feedstock is
-created by submitting a recipe to
-[conda-forge/staged-recipes](https://github.com/conda-forge/staged-recipes).
+irsync is deliberately not on conda-forge (decided 2026-09-06). It depends on
+`drivecfg`, which has no conda-forge package, so submitting irsync would also
+mean writing and co-maintaining a `drivecfg` recipe. Revisit once `drivecfg` is
+on conda-forge: the recipe then goes to
+[conda-forge/staged-recipes](https://github.com/conda-forge/staged-recipes),
+and once the feedstock exists its autotick bot opens a PR for each new PyPI
+version.
