@@ -493,6 +493,32 @@ already *is* rsync's `--dry-run` output — there is no separate diff view to
 show twice) and returns 0 before building the real command, so both paths
 share the same contract: preview shown, nothing touched, exit 0.
 
+### 31. The drive layout comes from drivecfg, loaded only when the arguments need it
+
+irsync ships no machine's storage layout. Drive ids, named endpoints (`~`,
+`mypython`, …) and the `ALL` backup order come from a `drivecfg.DriveConfig`
+(`Options.from_drive_config`; `Options.all_backups` is the config's
+`backup_order`). The config is loaded lazily, and `needs_drive_config`
+(`options.py`) decides from the argument text alone — never from what exists
+in the working directory, so the same command always means the same thing —
+whether an invocation needs one: `ALL` and a single-letter drive id always
+do; any source paired with a destination never does, which keeps
+`irsync SRC DEST` (and `irsync '~' /backup`, expanded by `Path.expanduser`)
+working on a machine with no `drives.toml`; a source with no destination
+does, because it can only be a configured name; and `--snapshot-only` relaxes
+that last rule, consulting a config that exists but otherwise treating the
+argument as a literal path (`resolve_source`). Every shorthand fails closed
+with exit 2 — an unconfigured drive id is refused, never guessed under
+`/media/$USER`. `base_dir` keeps its `/media/$USER` default only because it
+is the mount-gate root (AD-24): it can refuse a run but never redirect one. A
+config named explicitly — `--config`, or `$DRIVECFG_CONFIG`, decided on
+presence rather than truthiness so a set-but-empty variable is refused as
+drivecfg intends — must exist; only *discovery* coming up empty is tolerated,
+and only under `--snapshot-only`. A config that exists but is broken always
+refuses. Known wart: `cli.main` computes a second, inline predicate for the
+`--snapshot-only` "consult if present" case (see `PROGRESS.md`, Open
+questions).
+
 ## Appendix A — bug catalog
 
 28 bugs fixed across 10 review passes (passes 1-8 plus pass 10; pass 9 was
