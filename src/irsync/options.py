@@ -104,11 +104,11 @@ def needs_drive_config(
 
     * ``ALL`` and a single-letter drive id always need one — neither has any
       meaning outside a config, whether or not a destination was given.
-    * **Any** source paired with a destination needs none. That is the form
-      decision 1 protects (``irsync SRC DEST``), and it also covers ``~`` and
-      ``~/sub``, which :func:`resolve_endpoints` hands straight to
-      ``Path.expanduser``. Loading a config there would refuse a run that
-      never consults it.
+    * **Any** source paired with a destination needs none. That is the plain
+      ``irsync SRC DEST`` form, which must keep working on a machine with no
+      config file at all, and it also covers ``~`` and ``~/sub``, which
+      :func:`resolve_endpoints` hands straight to ``Path.expanduser``.
+      Loading a config there would refuse a run that never consults it.
     * A source with no destination needs one, because it cannot work without
       it: either the config names it (a drive, ``~``, ``mypython``, or an
       endpoint whose own source path was typed out in full) or the

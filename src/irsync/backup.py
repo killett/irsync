@@ -222,10 +222,11 @@ def _format_first_run_preview(
     """
     total_bytes = sum(r["size"] for r in rows if r["type"] == "f")
     size_str = _format_size(total_bytes)
-    # A remote destination is never scanned for foreign_dest_entries (Task 3
-    # only counts a local dest's existing entries), so foreign_count is
-    # always 0 here — not because the destination is empty, but because it
-    # was never checked. Say so instead of presenting an unchecked 0 as fact.
+    # A remote destination is never scanned for foreign_dest_entries (the
+    # destination gate only lists a local destination's entries), so
+    # foreign_count is always 0 here — not because the destination is empty,
+    # but because it was never checked. Say so instead of presenting an
+    # unchecked 0 as fact.
     if dest_root is None:
         dest_desc = "n/a (remote)"
         existing_desc = "not checked (remote)"
@@ -722,7 +723,8 @@ def _run_backup_for_endpoints(
         # at the destination before deciding whether to adopt it — so it must
         # not be blocked by the same refusal that guards the real transfer.
         # `foreign` is still computed unconditionally above: the first-run
-        # preview (Rule 3) reports it regardless of --dry-run.
+        # preview (``_format_first_run_preview``) reports it regardless of
+        # --dry-run.
         if foreign and not args.allow_nonempty_dest and not args.dry_run:
             shown = ", ".join(foreign[:10])
             more = f" (and {len(foreign) - 10} more)" if len(foreign) > 10 else ""
@@ -766,6 +768,8 @@ def _run_backup_for_endpoints(
         out, rc = _dry_run_preview(cmd)
         if out is None:
             return rc
+        # rsync's own --dry-run output, shown after confirmation; not an AD-7
+        # preview, so never paged.
         print(out)
         return 0
 
@@ -863,9 +867,9 @@ def _run_rsync_only(
     )
     # NEW-M1 (5th-pass). Always run the dry-run so a preview exists. Under
     # --yes (cron), print to stdout for auditability (AD-7); interactively,
-    # page through `less` and prompt for confirmation. Mirrors the snapshot
-    # path's _show_preview(..., interactive=not args.yes) behavior so the
-    # two code paths are consistent.
+    # page through `less` and prompt for confirmation. Uses the same
+    # _emit_preview as the snapshot path, so the two code paths cannot drift
+    # apart on AD-7.
     out, preview_rc = _dry_run_preview(dry_cmd)
     if out is None:
         # The preview failed, so we have nothing to show the user and no
@@ -928,7 +932,7 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
     directory). A destination that isn't mounted is different: if a drive is
     mounted but its backup drive is not, the run
     would back up nothing while still exiting 0, which is exactly the
-    silent-success hazard this branch exists to close. So
+    silent success the destination mount gate exists to prevent (AD-29). So
     :class:`~irsync.preflight.DestinationNotMounted` — like an unreadable
     destination (:class:`~irsync.preflight.UnsafeDestination`) — is counted
     as a real error, same as a non-zero ``run_backup`` return, and the
