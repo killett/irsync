@@ -70,7 +70,7 @@ def _file_type_char(
         return "d"
     if is_symlink:
         return "l"
-    if (mode & 0o170000) == 0o100000:
+    if stat.S_ISREG(mode):
         return "f"
     return "o"
 
