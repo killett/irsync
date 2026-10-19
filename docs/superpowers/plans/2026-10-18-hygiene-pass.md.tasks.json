@@ -172,12 +172,12 @@
     {
       "id": 19,
       "subject": "Task 19: Close the audit record",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The 2026-10-18 hygiene-notes entry lists what was applied (with commit hashes), what was kept and why, and the final counts; `PROGRESS.md` returns to maintenance with a correct next action; this plan's checkboxes and `.tasks.json` are complete.\n\n**Files:**\n- Modify: `docs/hygiene-notes.md` (2026-10-18 entry)\n- Modify: `PROGRESS.md` (Current work)\n- Modify: `docs/superpowers/plans/2026-10-18-hygiene-pass.md` and its `.tasks.json`\n\n**Acceptance Criteria:**\n- [ ] The entry has an \"Applied\" list naming every commit from Tasks 1\u201318 by hash, a \"Bugs fixed\" list, the kept items, and the before/after test counts as reported by pytest.\n- [ ] Every path, symbol, and hash in the entry is re-checked against the repo after writing (`git show --stat <hash>` for each hash; `rg` for each symbol).\n- [ ] `pixi run pre-commit run --all-files` and `pixi run test-cov` green; `git status --short` clean after the commit.\n\n**Verify:** `pixi run test-cov 2>&1 | tail -3` \u2192 `N passed` with N = baseline + new tests, then `git status --short` \u2192 empty\n\n```json:metadata\n{\"files\": [\"PROGRESS.md\", \"docs/hygiene-notes.md\", \"docs/superpowers/plans/2026-10-18-hygiene-pass.md\"], \"verifyCommand\": \"pixi run test-cov 2>&1 | tail -3\", \"acceptanceCriteria\": [\"The entry has an \\\"Applied\\\" list naming every commit from Tasks 1\\u201318 by hash, a \\\"Bugs fixed\\\" list, the kept items, and the before/after test counts as reported by pytest.\", \"Every path, symbol, and hash in the entry is re-checked against the repo after writing (`git show --stat <hash>` for each hash; `rg` for each symbol).\", \"`pixi run pre-commit run --all-files` and `pixi run test-cov` green; `git status --short` clean after the commit.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         18
       ]
     }
   ],
-  "lastUpdated": "2026-10-19T19:26:03.162302+00:00"
+  "lastUpdated": "2026-10-19T21:51:02.573267+00:00"
 }

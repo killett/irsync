@@ -994,16 +994,16 @@ questions).
 - Modify: `docs/superpowers/plans/2026-10-18-hygiene-pass.md` and its `.tasks.json`
 
 **Acceptance Criteria:**
-- [ ] The entry has an "Applied" list naming every commit from Tasks 1–18 by hash, a "Bugs fixed" list, the kept items, and the before/after test counts as reported by pytest.
-- [ ] Every path, symbol, and hash in the entry is re-checked against the repo after writing (`git show --stat <hash>` for each hash; `rg` for each symbol).
-- [ ] `pixi run pre-commit run --all-files` and `pixi run test-cov` green; `git status --short` clean after the commit.
+- [x] The entry has an "Applied" list naming every commit from Tasks 1–18 by hash, a "Bugs fixed" list, the kept items, and the before/after test counts as reported by pytest.
+- [x] Every path, symbol, and hash in the entry is re-checked against the repo after writing (`git show --stat <hash>` for each hash; `rg` for each symbol).
+- [x] `pixi run pre-commit run --all-files` and `pixi run test-cov` green; `git status --short` clean after the commit.
 
 **Verify:** `pixi run test-cov 2>&1 | tail -3` → `N passed` with N = baseline + new tests, then `git status --short` → empty
 
 **Steps:**
 
-- [ ] **Step 1:** Fill in the entry's Applied / Bugs fixed / Kept sections and final counts from `git log --oneline` and the last pytest run.
-- [ ] **Step 2:** `PROGRESS.md` Current work: Status back to maintenance; Next action "none pending" plus the deferred `unfinished_downloads` item and the open questions.
-- [ ] **Step 3:** Tick every checkbox in this plan; set every task's status to `completed` in `.tasks.json`.
-- [ ] **Step 4:** Re-read the entry against the repo (hashes, symbols, paths).
-- [ ] **Step 5:** Gate, then commit `docs: close out the 2026-10-18 hygiene pass`.
+- [x] **Step 1:** Fill in the entry's Applied / Bugs fixed / Kept sections and final counts from `git log --oneline` and the last pytest run.
+- [x] **Step 2:** `PROGRESS.md` Current work: Status back to maintenance; Next action "none pending" plus the deferred `unfinished_downloads` item and the open questions.
+- [x] **Step 3:** Tick every checkbox in this plan; set every task's status to `completed` in `.tasks.json`.
+- [x] **Step 4:** Re-read the entry against the repo (hashes, symbols, paths).
+- [x] **Step 5:** Gate, then commit `docs: close out the 2026-10-18 hygiene pass`.
