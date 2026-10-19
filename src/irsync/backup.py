@@ -612,9 +612,10 @@ def _run_backup_for_endpoints(
     if have_before:
         changes = compute_changes(before_rows, fresh_rows)
         logging.info(
-            "Diff: %d dir moves, %d file moves, %d created, %d deleted.",
+            "Diff: %d dir moves, %d file moves, %d modified, %d created, %d deleted.",
             len(changes.dir_moves),
             len(changes.file_moves),
+            len(changes.modified),
             len(changes.created),
             len(changes.deleted),
         )

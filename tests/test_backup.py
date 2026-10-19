@@ -2062,3 +2062,43 @@ class TestCleanRefusals:
         )
         assert rc == 0
         assert (src / SNAPSHOT_FILENAME).exists()
+
+
+class TestDiffSummaryLog:
+    """The one-line ``Diff:`` summary is what a cron log keeps; it must count every change kind."""
+
+    def test_modification_only_run_reports_the_modified_count(
+        self, src_dest, basic_options, caplog
+    ):
+        # Behavior: the Diff summary counts in-place modifications.
+        # Bug caught: the line predated Changes.modified and reported only
+        # moves/created/deleted, so a run that re-transfers an edited file
+        # logged all zeros, indistinguishable from a no-op in a cron log.
+        # Expected value: by construction exactly one file grows in place;
+        # nothing is created, deleted, or moved.
+        src, dest = src_dest
+        first = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(),
+        )
+        assert first == 0
+        victim = sorted(src.rglob("*.bin"))[0]
+        victim.write_bytes(victim.read_bytes() + b"grown")
+
+        with caplog.at_level(logging.INFO):
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert rc == 0
+        diff_lines = [
+            r.getMessage() for r in caplog.records if r.getMessage().startswith("Diff:")
+        ]
+        assert diff_lines == [
+            "Diff: 0 dir moves, 0 file moves, 1 modified, 0 created, 0 deleted."
+        ]
