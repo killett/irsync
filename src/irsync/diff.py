@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import TypedDict
 
-from irsync.snapshot import Row
+from irsync.snapshot import ROW_TYPES, Row
 
 _PathSubst = Callable[[str], str]
 
@@ -358,23 +358,24 @@ def compute_changes(
 
     before_keys = set(before.keys())
     after_keys = set(after.keys())
-    # Include every snapshotted inode type so brand-new and removed
-    # entries fire any_changes() and land in the rsync preview. Without
-    # "l" here (7th-NEW-H1), ln -s of a fresh link silently
-    # short-circuited the backup. Without "o" here (8th-M2), the same
-    # silent-skip pattern was latent for sockets / FIFOs / devices when
-    # include_other=True. Anything that snapshot_tree records belongs
+    # Include every snapshotted inode type (``ROW_TYPES``, the same tuple
+    # ``_validate_row`` enforces, so this filter can no longer fall behind
+    # it) so brand-new and removed entries fire any_changes() and land in
+    # the rsync preview. Without "l" here (7th-NEW-H1), ln -s of a fresh
+    # link silently short-circuited the backup. Without "o" here (8th-M2),
+    # the same silent-skip pattern was latent for sockets / FIFOs / devices
+    # when include_other=True. Anything that snapshot_tree records belongs
     # in the diff so rsync handles it.
     deleted_paths = [
         p
         for k, e in before.items()
-        if k not in after_keys and e["type"] in ("d", "f", "l", "o")
+        if k not in after_keys and e["type"] in ROW_TYPES
         for p in e["paths"]
     ]
     created_paths = [
         p
         for k, e in after.items()
-        if k not in before_keys and e["type"] in ("d", "f", "l", "o")
+        if k not in before_keys and e["type"] in ROW_TYPES
         for p in e["paths"]
     ]
 

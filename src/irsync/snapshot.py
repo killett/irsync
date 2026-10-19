@@ -8,7 +8,7 @@ import logging
 import stat
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, get_args
 
 from irsync import __version__
 from irsync.statx import btime_ns as _btime_ns
@@ -16,6 +16,12 @@ from irsync.statx import btime_ns as _btime_ns
 SNAPSHOT_FILENAME: str = ".irsync_snapshot.jsonl"
 LOCKFILE_NAME: str = ".irsync.lock"
 SNAPSHOT_TEMPFILE_PREFIX: str = ".irsync-snap-"
+
+RowType = Literal["f", "d", "l", "o"]
+"""A snapshot row's type tag: regular file, directory, symlink, or other."""
+
+ROW_TYPES: tuple[RowType, ...] = get_args(RowType)
+"""Every type tag a snapshot row may carry. The one list — validation and the diff both use it."""
 
 
 class SnapshotMismatch(Exception):
@@ -35,7 +41,7 @@ class Row(TypedDict):
 
     dev: int
     ino: int
-    type: Literal["f", "d", "l", "o"]
+    type: RowType
     nlink: int
     size: int
     mtime_ns: int  # st_mtime_ns; combined with size, defends against inode reuse
@@ -62,9 +68,7 @@ def _crosses_boundary(*, entry_dev: int, root_dev: int, xdev: bool) -> bool:
     return xdev and entry_dev != root_dev
 
 
-def _file_type_char(
-    mode: int, is_dir: bool, is_symlink: bool
-) -> Literal["f", "d", "l", "o"]:
+def _file_type_char(mode: int, is_dir: bool, is_symlink: bool) -> RowType:
     """Classify a stat ``mode`` into a single-character type tag."""
     if is_dir:
         return "d"
@@ -329,13 +333,14 @@ def _validate_row(obj: dict[str, object], file: Path, lineno: int) -> Row:
     for k in ("dev", "ino", "type", "nlink", "size", "path"):
         if k not in obj:
             raise SystemExit(f"Missing key '{k}' in {file}:{lineno}")
-    if obj["type"] not in ("f", "d", "l", "o"):
+    if obj["type"] not in ROW_TYPES:
         # 7th-M2: corrupted rows with unknown types were silently kept
         # and later filtered out by compute_changes' type whitelist,
         # hiding inode-level corruption. Refuse the whole snapshot.
+        expected = ", ".join(repr(t) for t in ROW_TYPES)
         raise SystemExit(
             f"Invalid type {obj['type']!r} in {file}:{lineno} "
-            "(expected one of 'f', 'd', 'l', 'o')"
+            f"(expected one of {expected})"
         )
     # mtime_ns and btime_ns were added in later passes; tolerate snapshots
     # written by older versions by defaulting to a sentinel (-1). Missing
