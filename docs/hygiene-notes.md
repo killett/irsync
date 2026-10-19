@@ -681,8 +681,160 @@ AD, update those two places in the same commit.
   `pyproject.toml`: once drivecfg 0.2 ships, CI and the local environment
   resolve different versions.
 
+### Applied
+
+Task numbers are those of `docs/superpowers/plans/2026-10-18-hygiene-pass.md`.
+Every commit below is on branch `hygiene-2026-10-18`, which branched from
+`main` at `eed5237`; one task is one commit unless the line lists more.
+
+- Task 0, record the audit: `e189eaa` "docs: record the 2026-10-18 hygiene
+  audit and its plan"; review fix round `5f06690` "docs: mark plan Task 0
+  complete and tighten the audit record".
+- Task 1, `stat.S_ISREG`: `9228f9f` "refactor: test for regular files with
+  stat.S_ISREG".
+- Task 2, `ALL_ARG`: `44dc539` "refactor: compare against ALL_ARG instead of
+  a second "ALL" literal".
+- Task 3, `ROW_TYPES`: `7a47a3a` "refactor: define the snapshot row type
+  tags once".
+- Task 4, `is_reserved_root_name`: `c2cc234` "refactor: share one
+  reserved-root-name predicate between the walk and preflight".
+- Task 5, `_emit_preview`: `34b4b8c` "refactor: route every preview through
+  one AD-7 helper".
+- Task 6, `Diff:` line counts `modified`: `54d5093` "fix: count modified
+  files in the Diff summary log line".
+- Task 7, SOURCE's help: `9a5037e` "fix: state the --snapshot-only
+  exception in SOURCE's help", plus `b0a4875` "fix: keep SOURCE's help
+  ASCII-only" (the plan's own wording had put an em dash in the help).
+- Task 8, `.Trash-*`: `34fdcf7` "fix: exclude every user's desktop trash,
+  not only uid 1000's".
+- Task 9, a corrupt snapshot refuses only its own drive: `0806da1` "fix:
+  refuse a corrupt snapshot per drive instead of exiting the process"; review
+  fix round `93f8942` "fix: treat a non-object snapshot line as corrupt" and
+  `1c63082` "fix: point a corrupt-snapshot refusal at a recovery that works".
+- Task 10, docstrings: `020871d` "docs: document the orchestrator and CLI
+  entry points".
+- Task 11, plan-relative comments: `2311317` "docs: replace plan-relative
+  references with self-contained wording".
+- Task 12, `statx` and ext4: `f230692` "docs: correct the ext4 condition for
+  missing btime".
+- Task 13, architecture-doc tables: `e0509f0` "docs: bring the architecture
+  doc's package tables up to date".
+- Task 13b, added during the pass (not in the plan's original list): the
+  corrupt-snapshot docs, `deca056` "docs: describe the corrupt-snapshot
+  refusal".
+- Task 14, AD-31: `c498dad` "docs: record the drivecfg layout decision as
+  AD-31".
+- Accuracy fix round for Tasks 10, 13, 13b and 14: `f8ccb99` "docs: make the
+  new architecture and CLI docs match the code exactly".
+- Task 15, AD index in `PROGRESS.md`: `079a433` "docs: list one AD per line
+  in PROGRESS.md, through AD-31".
+- Task 16, this file's 2026-07-31 entry: `2f60b6c` "docs: correct the
+  2026-07-31 hygiene notes against the current code".
+- Task 17, test comments: `5639a2e` "test: anchor drifted comment
+  references to symbols".
+- Task 18, `RELEASING.md`: `c019e84` "docs: update RELEASING.md for the live
+  publisher and the conda-forge decision".
+- Final whole-branch review fix wave: `4d62488` "docs: correct the README's
+  corrupt-snapshot bullet", `2d4533c` "docs: make the corrupt-snapshot docs
+  match the reader exactly", `dca4722` "docs: document _identity_subst and
+  point the rsync excludes at their predicate", and `08527b9` "test: keep
+  --help ASCII-only".
+- Task 19, this closing record: the commit "docs: close out the 2026-10-18
+  hygiene pass" that adds this list. It also corrects the architecture
+  doc's test total and updates `PROGRESS.md`.
+- Plan tracker sync, in six commits that only tick the plan's checkboxes and
+  its `.tasks.json`: `b047333`, `714b1d0`, `ceabcf7`, `11a2174`, `67d036e`
+  and `e21dd93` (each "docs: mark plan Task(s) ... complete").
+
+Not applied, by decision: `unfinished_downloads` stays in the default
+excludes (deferred, `PROGRESS.md` Deferred items), and the `# noqa: S404`
+comments stay (see Kept, above).
+
+### Counts
+
+Before: 323 collected — `322 passed, 1 skipped` (323 passed when the btime
+probe runs). Confirmed by collecting at `eed5237` in a scratch worktree.
+
+After: 337 collected, and the final `pixi run test-cov` printed `337 passed`
+(the btime probe ran; where btime collapses to mtime, e.g. tmpfs, it skips
+and the same code reads `336 passed, 1 skipped`).
+
+The 14 new tests, counted from the diff against `eed5237`:
+
+- `tests/test_backup.py`, 5: `TestDiffSummaryLog` (1, an edit-only run logs
+  the modified count); `TestDefaultExcludes` (2, one test parametrized over
+  `.Trash-1000` and `.Trash-1001`);
+  `TestCorruptSnapshotRefusesOnlyThatDrive` (2, a single run and an `ALL`
+  run).
+- `tests/test_cli.py`, 2: SOURCE's help names the `--snapshot-only`
+  exception; `--help` is ASCII-only.
+- `tests/test_snapshot.py`, 7: a root that is a file raises
+  `NotADirectoryError` (1); a malformed first line is `SnapshotCorrupt` (1);
+  a non-object row is `SnapshotCorrupt` (1 test, 4 parametrized cases:
+  `42`, `null`, `[1]` and `"x"`); a non-object `_meta` header is
+  `SnapshotCorrupt` (1).
+
+Nine of the 14 (2 + 7) belong to the corrupt-snapshot work. No test was
+removed or renamed. Four existing assertions in `test_snapshot.py` changed
+their expected exception from `SystemExit` to `FileNotFoundError` or
+`SnapshotCorrupt`; every other edit under `tests/` is comment rewording.
+
+### Found while fixing
+
+All four were reproduced at the branch tip with a runtime probe; none is
+fixed on this branch. They are the first four Open questions in
+`PROGRESS.md`.
+
+- **Trash replay.** Files reach a desktop trash by being *moved* there, and
+  irsync replays that move onto the backup. Because `.Trash-*` is excluded
+  from the rsync, `--delete-before` never removes the replayed copy, so the
+  deleted file stays on the backup even after the trash is emptied. The
+  probe moved a file into `.Trash-1001/files/`, backed up, emptied the
+  trash, and backed up again: the file was still on the destination. With
+  the old default and the trash dir named `.Trash-1000`, the same file also
+  stayed; with the old default and `.Trash-1001` (not excluded) it was
+  removed. So the hazard predates this branch for uid 1000, and the
+  `.Trash-*` default (the owner's decision) extends it to every uid. Root
+  fix for a later pass: drop planned moves whose target falls under an
+  excluded name, or apply the exclude list in the snapshot walk.
+- **Empty baseline.** `read_snapshot` returns `(None, [])` for a
+  zero-length or whitespace-only snapshot file and `(header, [])` for a
+  header-only one: a baseline with no rows. The destination gate (AD-25),
+  the empty-source guard (AD-28) and the >50% guard (AD-6) are then all
+  skipped. The probe backed up an unrelated non-empty source over a
+  destination holding five files under `--yes`, with each of the three
+  shapes, and rsync deleted all five. A legitimate snapshot always has a
+  header and a root row, so these shapes are always damage; the natural
+  fix is to raise `SnapshotCorrupt`. It is the recommended next fix.
+- **Other ways one bad drive can kill an `ALL` run.** A row whose values
+  have the wrong types (`"path": 5`, `"dev": [1]`) raises `TypeError`, and a
+  `.irsync_snapshot.jsonl` that is a directory raises `IsADirectoryError`.
+  Neither is caught by `run_backup`, `run_all_backups` or `cli.main`, so
+  the exception escapes the batch. (`"ino": "a"` and `"size": null` are
+  silently accepted.) A per-drive `except Exception` in `run_all_backups`
+  that logs and counts an error would close the whole class.
+- **Non-ASCII in user-facing strings (pre-existing).** The first-run banner
+  in `_format_first_run_preview` contains an em dash and is printed, so it
+  raises `UnicodeEncodeError` on an ASCII-only stdout
+  (`PYTHONIOENCODING=ascii`). The `_require_config` `ValueError` message and
+  the permission-denied log line in `run_backup` also contain one, but they
+  go through logging to stderr, which escapes the character instead of
+  failing. A C locale does not trigger any of this (Python still writes
+  UTF-8 there), so it is mostly theoretical. `--help` itself is now ASCII
+  and guarded by a test.
+
+### Process lessons
+
+- Two defects in this pass came from prose the controller dictated in the
+  plan, not from the implementers: an em dash in SOURCE's help (it broke
+  `--help` on an ASCII stdout; fixed in `b0a4875`) and an AD-21 sentence
+  that claimed more than the reader does (corrected in `f8ccb99`, then
+  `2d4533c`). Plan-dictated text needs the same accuracy review as code;
+  both were caught only because every task was reviewed against the code.
+- Per-task reviews kept finding real gaps the plan did not anticipate:
+  non-object snapshot lines, the trash replay and the empty baseline. Budget
+  a whole-branch review with runtime probes, not only per-task diff reviews.
+
 ### Status
 
-In progress — see `docs/superpowers/plans/2026-10-18-hygiene-pass.md`. The
-Applied list with commit hashes and the final counts are added when the
-plan's wrap-up task closes this entry.
+Complete on branch `hygiene-2026-10-18`; merging is the owner's decision.

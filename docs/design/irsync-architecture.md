@@ -80,10 +80,10 @@ secretly waking the backup drive on every run.
 | `test_backup.py` | orchestrator coverage (incl. persist ordering, dest orphan cleanup, pager session detachment, dest-untouched-on-no-change, fsync-before-replace ordering, a corrupt snapshot refusing only its own drive) |
 | `test_integration.py` | 4 end-to-end tests: umbrella exercising every reproducible bug from passes 1-7 + symlink add/delete + 8 random fuzz moves; cross-device refusal via real preflight; isolated H1 symlink add/delete regression net; `--no-snapshot --yes` audit-trail invariant. Pickers use the 10-attempt no-op retry loops from `make_random_moves.py` |
 
-Total: 336 tests as of the 2026-10-18 hygiene pass (168 at the pass-10
+Total: 337 tests as of the 2026-10-18 hygiene pass (168 at the pass-10
 migration). One of them, the kernel inode-reuse btime test, skips where btime
-collapses to mtime (e.g. tmpfs), so a run reports either 336 passed or
-335 passed, 1 skipped.
+collapses to mtime (e.g. tmpfs), so a run reports either 337 passed or
+336 passed, 1 skipped.
 
 ## Architectural decisions
 
