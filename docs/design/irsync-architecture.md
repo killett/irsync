@@ -80,9 +80,10 @@ secretly waking the backup drive on every run.
 | `test_backup.py` | orchestrator coverage (incl. persist ordering, dest orphan cleanup, pager session detachment, dest-untouched-on-no-change, fsync-before-replace ordering, a corrupt snapshot refusing only its own drive) |
 | `test_integration.py` | 4 end-to-end tests: umbrella exercising every reproducible bug from passes 1-7 + symlink add/delete + 8 random fuzz moves; cross-device refusal via real preflight; isolated H1 symlink add/delete regression net; `--no-snapshot --yes` audit-trail invariant. Pickers use the 10-attempt no-op retry loops from `make_random_moves.py` |
 
-Total: 168 tests (as of the pass-10 migration; 167 pass, 1 conditionally skipped
-— the kernel inode-reuse btime test that skips where btime collapses to mtime,
-e.g. tmpfs).
+Total: 336 tests as of the 2026-10-18 hygiene pass (168 at the pass-10
+migration). One of them, the kernel inode-reuse btime test, skips where btime
+collapses to mtime (e.g. tmpfs), so a run reports either 336 passed or
+335 passed, 1 skipped.
 
 ## Architectural decisions
 
@@ -351,10 +352,11 @@ non-UTF-8 source-root paths also round-trip.
 (one VFS operation), but the tempfile's data blocks may still be in the kernel
 page cache when replace runs. A power loss between rename and the kernel's
 delayed writeback leaves a directory entry pointing at empty/partial content;
-a partially written file then makes every snapshot-path run refuse
+a file cut off mid-line then makes every snapshot-path run refuse
 (`SnapshotCorrupt`) until the user moves the snapshot out of the source tree,
-costing one run's rename optimization; a zero-length file, by contrast,
-currently reads as an empty baseline rather than a corrupt one. The fix opens
+costing one run's rename optimization; a file cut at a line boundary, by
+contrast, currently reads as a shorter baseline, and a zero-length or
+header-only file as an empty one, rather than as corrupt. The fix opens
 the tempfile read-only and `os.fsync`s its fd between `write_snapshot` and
 `os.replace`. Parent-directory fsync is deliberately skipped — the user's
 filesystems (ext4/btrfs/xfs) handle the dirent flush implicitly under the

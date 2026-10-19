@@ -31,11 +31,12 @@ class SnapshotMismatch(Exception):
 class SnapshotCorrupt(ValueError):
     """Raised when a snapshot file cannot be read as a valid snapshot.
 
-    A malformed line, a row missing a required key, or an unknown type tag.
-    The snapshot is refused whole (7th-M2) rather than partially trusted. A
-    :class:`ValueError` subclass, so a caller that treats malformed input as
-    a refusal (``cli.main``'s boundary) still handles it if nothing closer
-    does.
+    A line that is not valid JSON or not a JSON object, a provenance header
+    whose ``_meta`` is not an object, a row missing a required key, or a row
+    with an unknown type tag. The snapshot is refused whole (7th-M2) rather
+    than partially trusted. A :class:`ValueError` subclass, so a caller that
+    treats malformed input as a refusal (``cli.main``'s boundary) still
+    handles it if nothing closer does.
     """
 
 
@@ -298,8 +299,9 @@ def read_snapshot(
 
     Raises:
         SnapshotMismatch: If the header's source root doesn't match.
-        SnapshotCorrupt: If a line is not valid JSON, a row lacks a required
-            key, or a row has an unknown type tag.
+        SnapshotCorrupt: If a line is not valid JSON or not a JSON object,
+            the header's ``_meta`` is not an object, or a row lacks a
+            required key or has an unknown type tag.
     """
     # 10th-F4: stream line by line instead of read_text + split("\n"). The
     # old approach materialized the whole file as one str plus a list of
