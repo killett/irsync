@@ -136,11 +136,14 @@ elsewhere, or mounted the drive at a different point), `SnapshotMismatch` is
 raised and the orchestrator treats the run as a first backup — a line of defense
 against using the wrong baseline. `read_snapshot` also validates that
 each row's `type` is one of `("f", "d", "l", "o")`; a corrupted row with an
-unknown type hard-fails the read instead of being silently dropped. Validation
-lives in a `_validate_row(obj, file, lineno)` helper applied to every row on
-both the headered and the legacy headerless branch; the reader streams line by
-line and reports **actual file line numbers** so `sed -n <N>p <file>` lands on
-the bad row.
+unknown type — or any line that is not valid JSON, is not a JSON object, or
+lacks a required key — raises `SnapshotCorrupt` instead of being silently
+dropped, and the orchestrator refuses that run (exit 2; an `ALL` batch counts
+it as one drive's error and moves on). The corrupt file is left in place for
+inspection. Validation lives in a `_validate_row(obj, file, lineno)` helper
+applied to every row on both the headered and the legacy headerless branch; the
+reader streams line by line and reports **actual file line numbers** so
+`sed -n <N>p <file>` lands on the bad row.
 
 ### 5. Reserved-namespace pattern at the source root
 
@@ -347,8 +350,9 @@ non-UTF-8 source-root paths also round-trip.
 (one VFS operation), but the tempfile's data blocks may still be in the kernel
 page cache when replace runs. A power loss between rename and the kernel's
 delayed writeback leaves a directory entry pointing at empty/partial content;
-the next run's `read_snapshot` then chokes on malformed JSONL with no recovery.
-The fix opens the tempfile read-only and `os.fsync`s its fd between
+the next run's `read_snapshot` then finds malformed JSONL, and every run
+refuses until the user moves the snapshot out of the source tree (costing one
+run's rename optimization). The fix opens the tempfile read-only and `os.fsync`s its fd between
 `write_snapshot` and `os.replace`. Parent-directory fsync is deliberately
 skipped — the user's filesystems (ext4/btrfs/xfs) handle the dirent flush
 implicitly under the journal, and explicit dir-fsync adds filesystem-specific
