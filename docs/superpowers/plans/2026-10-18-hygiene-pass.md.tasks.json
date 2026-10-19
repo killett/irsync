@@ -28,7 +28,7 @@
     {
       "id": 3,
       "subject": "Task 3: One definition of the row type tags",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The four snapshot row type tags (`f`, `d`, `l`, `o`) are defined once in `snapshot.py` (`RowType` / `ROW_TYPES`) and every other spelling uses them. The 7th-NEW-H1 and 8th-M2 bugs were `diff.py`'s copy of this list falling behind.\n\n**Files:**\n- Modify: `src/irsync/snapshot.py` (new `RowType`, `ROW_TYPES`; `Row.type`; `_file_type_char` return type; `_validate_row`)\n- Modify: `src/irsync/diff.py` (`compute_changes` type filters and their comment)\n\n**Acceptance Criteria:**\n- [ ] `rg -n \"\\\"f\\\", \\\"d\\\", \\\"l\\\", \\\"o\\\"|\\\"d\\\", \\\"f\\\", \\\"l\\\", \\\"o\\\"|'f', 'd', 'l', 'o'\" src` matches only the `RowType` definition.\n- [ ] `_validate_row`'s error message text is byte-identical: `(expected one of 'f', 'd', 'l', 'o')`.\n- [ ] mypy strict clean.\n\n**Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q` \u2192 all pass, then `pixi run typecheck` \u2192 `Success`\n\n```json:metadata\n{\"files\": [\"src/irsync/diff.py\", \"src/irsync/snapshot.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q\", \"acceptanceCriteria\": [\"`rg -n \\\"\\\\\\\"f\\\\\\\", \\\\\\\"d\\\\\\\", \\\\\\\"l\\\\\\\", \\\\\\\"o\\\\\\\"|\\\\\\\"d\\\\\\\", \\\\\\\"f\\\\\\\", \\\\\\\"l\\\\\\\", \\\\\\\"o\\\\\\\"|'f', 'd', 'l', 'o'\\\" src` matches only the `RowType` definition.\", \"`_validate_row`'s error message text is byte-identical: `(expected one of 'f', 'd', 'l', 'o')`.\", \"mypy strict clean.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         2
@@ -37,7 +37,7 @@
     {
       "id": 4,
       "subject": "Task 4: One predicate for irsync's reserved root names",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** \"Is this root-level name irsync's own file?\" is answered by one function, `snapshot.is_reserved_root_name`, used by both `snapshot_tree` and `preflight._non_reserved_names` (AD-5 requires every copy to change together).\n\n**Files:**\n- Modify: `src/irsync/snapshot.py` (new `is_reserved_root_name`; `snapshot_tree` skip)\n- Modify: `src/irsync/preflight.py` (`_non_reserved_names` body and docstring)\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'SNAPSHOT_FILENAME, LOCKFILE_NAME' src` matches only `is_reserved_root_name`.\n- [ ] `_non_reserved_names`' docstring no longer claims a list is \"spelled out in exactly one place\" that it wasn't; it names `is_reserved_root_name`.\n- [ ] Pass count unchanged.\n\n**Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_preflight.py tests/test_backup.py -q` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/preflight.py\", \"src/irsync/snapshot.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_snapshot.py tests/test_preflight.py tests/test_backup.py -q\", \"acceptanceCriteria\": [\"`rg -n 'SNAPSHOT_FILENAME, LOCKFILE_NAME' src` matches only `is_reserved_root_name`.\", \"`_non_reserved_names`' docstring no longer claims a list is \\\"spelled out in exactly one place\\\" that it wasn't; it names `is_reserved_root_name`.\", \"Pass count unchanged.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         3
@@ -46,7 +46,7 @@
     {
       "id": 5,
       "subject": "Task 5: One helper for the AD-7 preview rule",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** \"Page the preview interactively, print it under `--yes`\" (AD-7) lives in one helper, `_emit_preview`, used by the change preview, the first-run summary, and the `--no-snapshot` dry-run output.\n\n**Files:**\n- Modify: `src/irsync/backup.py` (`_show_preview`, the first-run branch of `_run_backup_for_endpoints`, `_run_rsync_only`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'print\\((text|out)\\)' src/irsync/backup.py` matches only inside `_emit_preview` (and `_page_output`'s no-`less` fallback, which prints `text`).\n- [ ] Confirmation and abort behavior unchanged (`_confirm_or_abort` still returns True under `--yes`).\n- [ ] Pass count unchanged.\n\n**Verify:** `pixi run python -m pytest tests/test_backup.py tests/test_integration.py -q` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_backup.py tests/test_integration.py -q\", \"acceptanceCriteria\": [\"`rg -n 'print\\\\((text|out)\\\\)' src/irsync/backup.py` matches only inside `_emit_preview` (and `_page_output`'s no-`less` fallback, which prints `text`).\", \"Confirmation and abort behavior unchanged (`_confirm_or_abort` still returns True under `--yes`).\", \"Pass count unchanged.\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         4
@@ -179,5 +179,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-19T17:55:55.616726+00:00"
+  "lastUpdated": "2026-10-19T18:06:51.416180+00:00"
 }

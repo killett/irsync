@@ -129,15 +129,15 @@ with
 - Modify: `src/irsync/diff.py` (`compute_changes` type filters and their comment)
 
 **Acceptance Criteria:**
-- [ ] `rg -n "\"f\", \"d\", \"l\", \"o\"|\"d\", \"f\", \"l\", \"o\"|'f', 'd', 'l', 'o'" src` matches only the `RowType` definition.
-- [ ] `_validate_row`'s error message text is byte-identical: `(expected one of 'f', 'd', 'l', 'o')`.
-- [ ] mypy strict clean.
+- [x] `rg -n "\"f\", \"d\", \"l\", \"o\"|\"d\", \"f\", \"l\", \"o\"|'f', 'd', 'l', 'o'" src` matches only the `RowType` definition.
+- [x] `_validate_row`'s error message text is byte-identical: `(expected one of 'f', 'd', 'l', 'o')`.
+- [x] mypy strict clean.
 
 **Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q` → all pass, then `pixi run typecheck` → `Success`
 
 **Steps:**
 
-- [ ] **Step 1:** In `snapshot.py`, extend the typing import to `from typing import Literal, TypedDict, get_args` and add after `SNAPSHOT_TEMPFILE_PREFIX`:
+- [x] **Step 1:** In `snapshot.py`, extend the typing import to `from typing import Literal, TypedDict, get_args` and add after `SNAPSHOT_TEMPFILE_PREFIX`:
 
 ```python
 RowType = Literal["f", "d", "l", "o"]
@@ -149,8 +149,8 @@ ROW_TYPES: tuple[RowType, ...] = get_args(RowType)
 
 If mypy rejects `get_args(RowType)` on the implicit alias, use a PEP 695 alias instead (`type RowType = Literal[...]` and `get_args(RowType.__value__)`); do NOT annotate with `TypeAlias` (ruff UP040 rejects it).
 
-- [ ] **Step 2:** `Row.type: RowType`; `_file_type_char(...) -> RowType:`.
-- [ ] **Step 3:** In `_validate_row` replace the membership test and message with:
+- [x] **Step 2:** `Row.type: RowType`; `_file_type_char(...) -> RowType:`.
+- [x] **Step 3:** In `_validate_row` replace the membership test and message with:
 
 ```python
     if obj["type"] not in ROW_TYPES:
@@ -164,8 +164,8 @@ If mypy rejects `get_args(RowType)` on the implicit alias, use a PEP 695 alias i
         )
 ```
 
-- [ ] **Step 4:** In `diff.py`: `from irsync.snapshot import ROW_TYPES, Row`; both `e["type"] in ("d", "f", "l", "o")` become `e["type"] in ROW_TYPES`; in the comment above them, change "Include every snapshotted inode type" to "Include every snapshotted inode type (`ROW_TYPES`, the same tuple `_validate_row` enforces, so this filter can no longer fall behind it)". Keep the 7th-NEW-H1 / 8th-M2 history sentences.
-- [ ] **Step 5:** Gate, then commit `refactor: define the snapshot row type tags once` (stage both files).
+- [x] **Step 4:** In `diff.py`: `from irsync.snapshot import ROW_TYPES, Row`; both `e["type"] in ("d", "f", "l", "o")` become `e["type"] in ROW_TYPES`; in the comment above them, change "Include every snapshotted inode type" to "Include every snapshotted inode type (`ROW_TYPES`, the same tuple `_validate_row` enforces, so this filter can no longer fall behind it)". Keep the 7th-NEW-H1 / 8th-M2 history sentences.
+- [x] **Step 5:** Gate, then commit `refactor: define the snapshot row type tags once` (stage both files).
 
 ### Task 4: One predicate for irsync's reserved root names
 
@@ -176,15 +176,15 @@ If mypy rejects `get_args(RowType)` on the implicit alias, use a PEP 695 alias i
 - Modify: `src/irsync/preflight.py` (`_non_reserved_names` body and docstring)
 
 **Acceptance Criteria:**
-- [ ] `rg -n 'SNAPSHOT_FILENAME, LOCKFILE_NAME' src` matches only `is_reserved_root_name`.
-- [ ] `_non_reserved_names`' docstring no longer claims a list is "spelled out in exactly one place" that it wasn't; it names `is_reserved_root_name`.
-- [ ] Pass count unchanged.
+- [x] `rg -n 'SNAPSHOT_FILENAME, LOCKFILE_NAME' src` matches only `is_reserved_root_name`.
+- [x] `_non_reserved_names`' docstring no longer claims a list is "spelled out in exactly one place" that it wasn't; it names `is_reserved_root_name`.
+- [x] Pass count unchanged.
 
 **Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_preflight.py tests/test_backup.py -q` → all pass
 
 **Steps:**
 
-- [ ] **Step 1:** In `snapshot.py`, after the constants (and `ROW_TYPES`), add:
+- [x] **Step 1:** In `snapshot.py`, after the constants (and `ROW_TYPES`), add:
 
 ```python
 def is_reserved_root_name(name: str) -> bool:
@@ -208,7 +208,7 @@ def is_reserved_root_name(name: str) -> bool:
     )
 ```
 
-- [ ] **Step 2:** In `snapshot_tree`, replace
+- [x] **Step 2:** In `snapshot_tree`, replace
 
 ```python
             if rel in (SNAPSHOT_FILENAME, LOCKFILE_NAME):
@@ -226,8 +226,8 @@ with
 
 (Equivalent: a `rel` containing `/` can never equal either reserved filename.) Keep the comment above it, adjusting "Naturally limited to root since..." to say the `"/" not in rel` test is what limits it to the root.
 
-- [ ] **Step 3:** In `preflight._non_reserved_names`, keep the function-local import (documented intent in the mount-safety plan: insurance against a future import cycle) but import only `is_reserved_root_name`, and return `[name for name in names if not is_reserved_root_name(name)]`. Rewrite the docstring's first paragraph to: "Shared by :func:`foreign_dest_entries` (destination side) and :func:`source_root_is_empty` (source side). The reserved-name rule itself is :func:`~irsync.snapshot.is_reserved_root_name`, the same predicate the snapshot walk uses, so adding a reserved file is a one-place change."
-- [ ] **Step 4:** Gate, then commit `refactor: share one reserved-root-name predicate between the walk and preflight`.
+- [x] **Step 3:** In `preflight._non_reserved_names`, keep the function-local import (documented intent in the mount-safety plan: insurance against a future import cycle) but import only `is_reserved_root_name`, and return `[name for name in names if not is_reserved_root_name(name)]`. Rewrite the docstring's first paragraph to: "Shared by :func:`foreign_dest_entries` (destination side) and :func:`source_root_is_empty` (source side). The reserved-name rule itself is :func:`~irsync.snapshot.is_reserved_root_name`, the same predicate the snapshot walk uses, so adding a reserved file is a one-place change."
+- [x] **Step 4:** Gate, then commit `refactor: share one reserved-root-name predicate between the walk and preflight`.
 
 ### Task 5: One helper for the AD-7 preview rule
 
@@ -237,15 +237,15 @@ with
 - Modify: `src/irsync/backup.py` (`_show_preview`, the first-run branch of `_run_backup_for_endpoints`, `_run_rsync_only`)
 
 **Acceptance Criteria:**
-- [ ] `rg -n 'print\((text|out)\)' src/irsync/backup.py` matches only inside `_emit_preview` (and `_page_output`'s no-`less` fallback, which prints `text`).
-- [ ] Confirmation and abort behavior unchanged (`_confirm_or_abort` still returns True under `--yes`).
-- [ ] Pass count unchanged.
+- [x] `rg -n 'print\((text|out)\)' src/irsync/backup.py` matches only inside `_emit_preview` (and `_page_output`'s no-`less` fallback, which prints `text`).
+- [x] Confirmation and abort behavior unchanged (`_confirm_or_abort` still returns True under `--yes`).
+- [x] Pass count unchanged.
 
 **Verify:** `pixi run python -m pytest tests/test_backup.py tests/test_integration.py -q` → all pass
 
 **Steps:**
 
-- [ ] **Step 1:** Replace `_show_preview` with:
+- [x] **Step 1:** Replace `_show_preview` with:
 
 ```python
 def _emit_preview(text: str, *, interactive: bool) -> None:
@@ -267,7 +267,7 @@ def _show_preview(changes: Changes, *, interactive: bool) -> None:
     _emit_preview(_format_preview(changes), interactive=interactive)
 ```
 
-- [ ] **Step 2:** In `_run_backup_for_endpoints`, replace the `else:` branch of `if changes is not None:` with:
+- [x] **Step 2:** In `_run_backup_for_endpoints`, replace the `else:` branch of `if changes is not None:` with:
 
 ```python
     else:
@@ -277,7 +277,7 @@ def _show_preview(changes: Changes, *, interactive: bool) -> None:
         )
 ```
 
-- [ ] **Step 3:** In `_run_rsync_only`, replace
+- [x] **Step 3:** In `_run_rsync_only`, replace
 
 ```python
     if args.yes:
@@ -298,7 +298,7 @@ with
 
 (Equivalent: `_confirm_or_abort` returns True immediately when `args.yes`.)
 
-- [ ] **Step 4:** Gate, then commit `refactor: route every preview through one AD-7 helper`.
+- [x] **Step 4:** Gate, then commit `refactor: route every preview through one AD-7 helper`.
 
 ---
 
