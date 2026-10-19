@@ -315,14 +315,14 @@ Test-design notes for every test in this phase: each states the behavior, the co
 - Test: `tests/test_backup.py` (new class `TestDiffSummaryLog`)
 
 **Acceptance Criteria:**
-- [ ] A modification-only run logs exactly `Diff: 0 dir moves, 0 file moves, 1 modified, 0 created, 0 deleted.`
-- [ ] The new test fails before the fix (old line lacks `modified`) and passes after.
+- [x] A modification-only run logs exactly `Diff: 0 dir moves, 0 file moves, 1 modified, 0 created, 0 deleted.`
+- [x] The new test fails before the fix (old line lacks `modified`) and passes after.
 
 **Verify:** `pixi run python -m pytest tests/test_backup.py -q -k DiffSummaryLog` → 1 passed
 
 **Steps:**
 
-- [ ] **Step 1: Write the failing test** (append to `tests/test_backup.py`):
+- [x] **Step 1: Write the failing test** (append to `tests/test_backup.py`):
 
 ```python
 class TestDiffSummaryLog:
@@ -365,8 +365,8 @@ class TestDiffSummaryLog:
         ]
 ```
 
-- [ ] **Step 2:** Run `pixi run python -m pytest tests/test_backup.py -q -k DiffSummaryLog` → FAIL: the list holds `'Diff: 0 dir moves, 0 file moves, 0 created, 0 deleted.'`.
-- [ ] **Step 3:** Implement:
+- [x] **Step 2:** Run `pixi run python -m pytest tests/test_backup.py -q -k DiffSummaryLog` → FAIL: the list holds `'Diff: 0 dir moves, 0 file moves, 0 created, 0 deleted.'`.
+- [x] **Step 3:** Implement:
 
 ```python
         logging.info(
@@ -379,8 +379,8 @@ class TestDiffSummaryLog:
         )
 ```
 
-- [ ] **Step 4:** Re-run → PASS. Then `rg -n 'Diff: %d|"Diff:' tests` to confirm no other test pinned the old text.
-- [ ] **Step 5:** Gate, then commit `fix: count modified files in the Diff summary log line`.
+- [x] **Step 4:** Re-run → PASS. Then `rg -n 'Diff: %d|"Diff:' tests` to confirm no other test pinned the old text.
+- [x] **Step 5:** Gate, then commit `fix: count modified files in the Diff summary log line`.
 
 ### Task 7: SOURCE --help names the --snapshot-only exception
 
@@ -391,14 +391,14 @@ class TestDiffSummaryLog:
 - Test: `tests/test_cli.py` (new test)
 
 **Acceptance Criteria:**
-- [ ] The `source_arg` help mentions `--snapshot-only`.
-- [ ] The test fails before the change and passes after.
+- [x] The `source_arg` help mentions `--snapshot-only`.
+- [x] The test fails before the change and passes after.
 
 **Verify:** `pixi run python -m pytest tests/test_cli.py -q -k snapshot_only_exception` → 1 passed
 
 **Steps:**
 
-- [ ] **Step 1: Write the failing test** (append to `tests/test_cli.py`):
+- [x] **Step 1: Write the failing test** (append to `tests/test_cli.py`):
 
 ```python
 def test_source_help_names_the_snapshot_only_exception():
@@ -414,8 +414,8 @@ def test_source_help_names_the_snapshot_only_exception():
     assert "--snapshot-only" in " ".join(str(source.help).split())
 ```
 
-- [ ] **Step 2:** Run it → FAIL (`--snapshot-only` not in the SOURCE help).
-- [ ] **Step 3:** Replace the `source_arg` help's last sentence so the string reads:
+- [x] **Step 2:** Run it → FAIL (`--snapshot-only` not in the SOURCE help).
+- [x] **Step 3:** Replace the `source_arg` help's last sentence so the string reads:
 
 ```python
         help=(
@@ -432,8 +432,8 @@ def test_source_help_names_the_snapshot_only_exception():
         ),
 ```
 
-- [ ] **Step 4:** Re-run → PASS; also `pixi run python -m pytest tests/test_cli.py -q` (the no-private-paths help test must still pass).
-- [ ] **Step 5:** Gate, then commit `fix: state the --snapshot-only exception in SOURCE's help`.
+- [x] **Step 4:** Re-run → PASS; also `pixi run python -m pytest tests/test_cli.py -q` (the no-private-paths help test must still pass).
+- [x] **Step 5:** Gate, then commit `fix: state the --snapshot-only exception in SOURCE's help`.
 
 ### Task 8: Exclude every user's desktop trash
 
@@ -444,15 +444,15 @@ def test_source_help_names_the_snapshot_only_exception():
 - Test: `tests/test_backup.py` (new class `TestDefaultExcludes`)
 
 **Acceptance Criteria:**
-- [ ] A default run does not transfer `.Trash-1000/` or `.Trash-1001/`, and does transfer ordinary files.
-- [ ] The `.Trash-1001` case fails before the fix; both pass after.
-- [ ] `unfinished_downloads` stays in the default list (user decision: deferred).
+- [x] A default run does not transfer `.Trash-1000/` or `.Trash-1001/`, and does transfer ordinary files.
+- [x] The `.Trash-1001` case fails before the fix; both pass after.
+- [x] `unfinished_downloads` stays in the default list (user decision: deferred).
 
 **Verify:** `pixi run python -m pytest tests/test_backup.py -q -k DefaultExcludes` → 2 passed
 
 **Steps:**
 
-- [ ] **Step 1: Write the failing test** (append to `tests/test_backup.py`):
+- [x] **Step 1: Write the failing test** (append to `tests/test_backup.py`):
 
 ```python
 class TestDefaultExcludes:
@@ -487,10 +487,10 @@ class TestDefaultExcludes:
         assert not (dest / trash_dir).exists()
 ```
 
-- [ ] **Step 2:** Run → `.Trash-1001` FAILS (`dest/.Trash-1001` exists), `.Trash-1000` passes.
-- [ ] **Step 3:** In `Options`, change the default to `[".Trash-*", ".cache", "unfinished_downloads"]` and the attribute doc to: `exclude_dirs: Names or rsync patterns skipped by default, at any depth. ".Trash-*" covers every user's desktop trash (freedesktop's ".Trash-$uid").`
-- [ ] **Step 4:** Re-run → both PASS.
-- [ ] **Step 5:** Gate, then commit `fix: exclude every user's desktop trash, not only uid 1000's`.
+- [x] **Step 2:** Run → `.Trash-1001` FAILS (`dest/.Trash-1001` exists), `.Trash-1000` passes.
+- [x] **Step 3:** In `Options`, change the default to `[".Trash-*", ".cache", "unfinished_downloads"]` and the attribute doc to: `exclude_dirs: Names or rsync patterns skipped by default, at any depth. ".Trash-*" covers every user's desktop trash (freedesktop's ".Trash-$uid").`
+- [x] **Step 4:** Re-run → both PASS.
+- [x] **Step 5:** Gate, then commit `fix: exclude every user's desktop trash, not only uid 1000's`.
 
 ### Task 9: A corrupt snapshot refuses only its own drive
 
