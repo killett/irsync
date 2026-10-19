@@ -149,7 +149,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     from irsync.backup import EXIT_REFUSED, run_all_backups, run_backup
-    from irsync.options import Options, needs_drive_config
+    from irsync.options import ALL_ARG, Options, needs_drive_config
 
     parser = _build_parser()
 
@@ -252,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         options = Options.without_drive_config()
 
     try:
-        if args.source_arg.strip().upper() == "ALL":
+        if args.source_arg.strip().upper() == ALL_ARG:
             if args.destination_arg:
                 parser.error("Destination is not allowed when SOURCE is 'ALL'.")
             return run_all_backups(options=options, args=args)
