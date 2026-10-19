@@ -4,7 +4,7 @@
     {
       "id": 0,
       "subject": "Task 0: Record the audit and this plan",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The audit findings, the user's decisions, and this plan are committed, and `PROGRESS.md` points at them, so a dead session loses nothing.\n\n**Files:**\n- Modify: `docs/hygiene-notes.md` (append a new `## 2026-10-18 \u2014 ...` entry)\n- Modify: `PROGRESS.md` (Current work block; Deferred items; Gotchas)\n- Create: `docs/superpowers/plans/2026-10-18-hygiene-pass.md` (this file) and `docs/superpowers/plans/2026-10-18-hygiene-pass.md.tasks.json`\n\n**Acceptance Criteria:**\n- [ ] `docs/hygiene-notes.md` has a `## 2026-10-18` entry listing the baseline, every finding with its category and decision, the user's decisions, and a pointer to this plan.\n- [ ] `PROGRESS.md` Current work names this plan as active work and its next action is \"first unchecked task in the plan\".\n- [ ] The dangling pointer to `docs/superpowers/plans/2026-07-18-handoff-migration.md` is gone from `PROGRESS.md`.\n- [ ] `PROGRESS.md` Deferred items has an `unfinished_downloads` bullet.\n- [ ] Gate green; one commit.\n\n**Verify:** `rg -n '2026-10-18' docs/hygiene-notes.md PROGRESS.md && ! rg -q 'handoff-migration' PROGRESS.md && echo OK` \u2192 prints matches then `OK`\n\n```json:metadata\n{\"files\": [\"PROGRESS.md\", \"docs/hygiene-notes.md\", \"docs/superpowers/plans/2026-10-18-hygiene-pass.md\", \"docs/superpowers/plans/2026-10-18-hygiene-pass.md.tasks.json\"], \"verifyCommand\": \"rg -n '2026-10-18' docs/hygiene-notes.md PROGRESS.md && ! rg -q 'handoff-migration' PROGRESS.md && echo OK\", \"acceptanceCriteria\": [\"`docs/hygiene-notes.md` has a `## 2026-10-18` entry listing the baseline, every finding with its category and decision, the user's decisions, and a pointer to this plan.\", \"`PROGRESS.md` Current work names this plan as active work and its next action is \\\"first unchecked task in the plan\\\".\", \"The dangling pointer to `docs/superpowers/plans/2026-07-18-handoff-migration.md` is gone from `PROGRESS.md`.\", \"`PROGRESS.md` Deferred items has an `unfinished_downloads` bullet.\", \"Gate green; one commit.\"], \"modelTier\": \"standard\"}\n```"
     },
     {
@@ -179,5 +179,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-19T04:40:51.164590+00:00"
+  "lastUpdated": "2026-10-19T17:48:51.123514+00:00"
 }

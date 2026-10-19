@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12+, pytest, ruff, mypy (strict), pixi, rsync (real binary in tests), drivecfg.
 
-**Spec:** `docs/hygiene-notes.md`, section "2026-10-18 — whole-repo audit (all three: record, clean up, fix)" (written by Task 0). Every finding below is defined there.
+**Spec:** `docs/hygiene-notes.md`, section "2026-10-18 — whole-repo audit (record, clean up, and fix all approved)" (written by Task 0). Every finding below is defined there.
 
 ## Global Constraints
 
@@ -44,21 +44,21 @@
 - Create: `docs/superpowers/plans/2026-10-18-hygiene-pass.md` (this file) and `docs/superpowers/plans/2026-10-18-hygiene-pass.md.tasks.json`
 
 **Acceptance Criteria:**
-- [ ] `docs/hygiene-notes.md` has a `## 2026-10-18` entry listing the baseline, every finding with its category and decision, the user's decisions, and a pointer to this plan.
-- [ ] `PROGRESS.md` Current work names this plan as active work and its next action is "first unchecked task in the plan".
-- [ ] The dangling pointer to `docs/superpowers/plans/2026-07-18-handoff-migration.md` is gone from `PROGRESS.md`.
-- [ ] `PROGRESS.md` Deferred items has an `unfinished_downloads` bullet.
-- [ ] Gate green; one commit.
+- [x] `docs/hygiene-notes.md` has a `## 2026-10-18` entry listing the baseline, every finding with its category and decision, the user's decisions, and a pointer to this plan.
+- [x] `PROGRESS.md` Current work names this plan as active work and its next action is "first unchecked task in the plan".
+- [x] The dangling pointer to `docs/superpowers/plans/2026-07-18-handoff-migration.md` is gone from `PROGRESS.md`.
+- [x] `PROGRESS.md` Deferred items has an `unfinished_downloads` bullet.
+- [x] Gate green; one commit.
 
 **Verify:** `rg -n '2026-10-18' docs/hygiene-notes.md PROGRESS.md && ! rg -q 'handoff-migration' PROGRESS.md && echo OK` → prints matches then `OK`
 
 **Steps:**
 
-- [ ] **Step 1:** Append the 2026-10-18 entry to `docs/hygiene-notes.md`: scope and baseline (`pre-commit` green, `322 passed, 1 skipped`), findings grouped as Bugs / Code clean-ups / Doc drift / Kept / Environment observations, each with category, behavior-preserving yes/no, risk, decision, and the user's decisions from this plan's header. End with "Status: in progress — see `docs/superpowers/plans/2026-10-18-hygiene-pass.md`."
-- [ ] **Step 2:** Rewrite `PROGRESS.md`'s Current work block: Status = active 2026-10-18 hygiene pass; Pointer = this plan + the hygiene-notes entry; Next action = first unchecked task in the plan. Keep the release facts (0.1.0 published 2026-09-06, trusted publisher live, conda-forge declined because `drivecfg` has no conda-forge package) and move the "PROGRESS.md is public" warning into Gotchas. Drop the summaries of earlier hygiene passes (they live in `docs/hygiene-notes.md`) and the dangling handoff-migration pointer.
-- [ ] **Step 3:** Add to Deferred items: `unfinished_downloads` is a personal folder name hardcoded in `Options.exclude_dirs`'s default, contradicting the `Options` docstring; there is no CLI/config hook to add excludes, so removing it would silently start backing that folder up; options when revisited: excludes in the drivecfg config, an `--exclude` flag, or keep and document it as a personal default.
-- [ ] **Step 4:** Write the `.tasks.json` beside this plan.
-- [ ] **Step 5:** Gate, then commit:
+- [x] **Step 1:** Append the 2026-10-18 entry to `docs/hygiene-notes.md`: scope and baseline (`pre-commit` green, `322 passed, 1 skipped`), findings grouped as Bugs / Code clean-ups / Doc drift / Kept / Environment observations, each with category, behavior-preserving yes/no, risk, decision, and the user's decisions from this plan's header. End with "Status: in progress — see `docs/superpowers/plans/2026-10-18-hygiene-pass.md`."
+- [x] **Step 2:** Rewrite `PROGRESS.md`'s Current work block: Status = active 2026-10-18 hygiene pass; Pointer = this plan + the hygiene-notes entry; Next action = first unchecked task in the plan. Keep the release facts (0.1.0 published 2026-09-06, trusted publisher live, conda-forge declined because `drivecfg` has no conda-forge package) and move the "PROGRESS.md is public" warning into Gotchas. Drop the summaries of earlier hygiene passes (they live in `docs/hygiene-notes.md`) and the dangling handoff-migration pointer.
+- [x] **Step 3:** Add to Deferred items: `unfinished_downloads` is a personal folder name hardcoded in `Options.exclude_dirs`'s default, contradicting the `Options` docstring; there is no CLI/config hook to add excludes, so removing it would silently start backing that folder up; options when revisited: excludes in the drivecfg config, an `--exclude` flag, or keep and document it as a personal default.
+- [x] **Step 4:** Write the `.tasks.json` beside this plan.
+- [x] **Step 5:** Gate, then commit:
 
 ```bash
 git add docs/hygiene-notes.md PROGRESS.md docs/superpowers/plans/2026-10-18-hygiene-pass.md docs/superpowers/plans/2026-10-18-hygiene-pass.md.tasks.json

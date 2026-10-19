@@ -552,7 +552,7 @@ families the project does not select (`RUF100`, `PLR2004`, `PLC0415`,
 still exists in code; and a direct runtime repro of each suspected bug
 before calling it one.
 
-### Bugs (behavior changes — fixed red/green in this pass)
+### Bugs (behavior changes — approved; each is fixed red/green by its own plan task)
 
 - **A corrupt snapshot killed a whole `ALL` run.** `read_snapshot` and
   `_validate_row` raised `SystemExit` (as did `snapshot_tree` for a missing
@@ -577,7 +577,7 @@ before calling it one.
 - **SOURCE's `--help` was wrong under `--snapshot-only`:** it said every
   bare path without a destination needs a config.
 
-### Clean-ups (strictly behavior-preserving)
+### Clean-ups (strictly behavior-preserving, all low risk)
 
 - *magic* — `_file_type_char` hand-codes `(mode & 0o170000) == 0o100000`,
   which is `stat.S_ISREG(mode)`.
@@ -606,7 +606,7 @@ before calling it one.
   without `-O extent`"; ext4 reports `i_crtime` only when the field fits in
   the inode, i.e. on 256-byte inodes. Extents are unrelated.
 
-### Doc drift
+### Doc drift (documentation only, no runtime risk)
 
 - `PROGRESS.md`: all 23 AD bullets sat on one line and rendered as a single
   bullet; AD-24–AD-30 were missing; AD-6's line still named `--force` as
