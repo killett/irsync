@@ -156,18 +156,20 @@ Design doc: `docs/superpowers/specs/2026-07-31-mount-safety-design.md`
   unit-tested via the extracted pure helper `_crosses_boundary` in
   `test_snapshot.py`; the integration — an actual mount inside a snapshot
   walk producing the aggregated warning — is not exercised anywhere.
-- **The `(and N more)` truncation branch of the nested-mount warning** (more
-  than 5 skipped paths) is untested, as is `include_other=True` combined with
-  a crossed filesystem boundary. Both are plausible in production and neither
-  has a regression test.
+- ~~**The `(and N more)` truncation branch of the nested-mount warning** (more
+  than 5 skipped paths) is untested.~~ **Corrected 2026-10-18:** covered since
+  `b342f60` (21 minutes after this entry was written) by
+  `test_walk_reports_truncated_count_past_five_skipped_dirs`. Still true:
+  `include_other=True` combined with a crossed filesystem boundary has no
+  regression test.
 - **The destination gate has a `--dry-run` carve-out.** In
-  `_run_backup_for_endpoints`, the baseline-less destination check
-  (`backup.py:665`) is gated on `not args.dry_run`, so a dry run against a
-  non-empty first-run destination previews instead of refusing — `foreign`
-  is still computed unconditionally so the first-run preview (Rule 3) can
-  report it. The empty-source guard just above it (`backup.py:640`) has no
-  such carve-out and runs first, so it still pre-empts the destination
-  gate's dry-run exemption whenever the source itself is empty; see AD-28.
+  `_run_backup_for_endpoints`, the baseline-less destination check is gated
+  on `not args.dry_run`, so a dry run against a non-empty first-run
+  destination previews instead of refusing — `foreign` is still computed
+  unconditionally so the first-run preview (Rule 3) can report it. The
+  empty-source guard just above it has no such carve-out and runs first, so
+  it still pre-empts the destination gate's dry-run exemption whenever the
+  source itself is empty; see AD-28.
 - ~~**The `PermissionError` log-and-return block is duplicated verbatim**
   between `run_backup` and `_run_snapshot_only` in `src/irsync/backup.py`.~~
   **Resolved.** It was factored into `_log_source_permission_error`
@@ -259,14 +261,15 @@ the test if it is called at all during a dry run.
 - **M2 — a comment claimed `--no-snapshot` "has no concept of a prior
   snapshot at all."** False: a snapshot file can exist on disk from an
   earlier run; what's true is that this code path never reads one. Reworded
-  at `backup.py:557` to state the actual consequence: a user with a real
-  baseline who genuinely emptied their source and runs `--no-snapshot` is
-  steered to `--allow-empty-source` rather than `--allow-massive-delete`,
-  because the >50% guard is unreachable on this path.
+  in `_run_backup_for_endpoints`' `--no-snapshot` branch to state the actual
+  consequence: a user with a real baseline who genuinely emptied their
+  source and runs `--no-snapshot` is steered to `--allow-empty-source` rather
+  than `--allow-massive-delete`, because the >50% guard is unreachable on
+  this path.
 - **M3 — this file's own coverage-gap bullet had gone stale.** It said the
   destination gate refuses on `--dry-run`; the `not args.dry_run` carve-out
-  at `backup.py:665` (added in this same pass, see AD-25/AD-28 above)
-  contradicts that. Corrected above.
+  in `_run_backup_for_endpoints` (added in this same pass, see AD-25/AD-28
+  above) contradicts that. Corrected above.
 - **M4 — AD-28 didn't record the dry-run asymmetry as intentional.** The
   empty-source guard is deliberately *not* `--dry-run`-exempt, unlike the
   destination gate, and since it runs first it pre-empts the destination
