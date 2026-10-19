@@ -744,7 +744,8 @@ Every commit below is on branch `hygiene-2026-10-18`, which branched from
   doc's test total and updates `PROGRESS.md`.
 - Plan tracker sync, in six commits that only tick the plan's checkboxes and
   its `.tasks.json`: `b047333`, `714b1d0`, `ceabcf7`, `11a2174`, `67d036e`
-  and `e21dd93` (each "docs: mark plan Task(s) ... complete").
+  and `e21dd93` (each "docs: mark plan Task(s) ... complete"), plus a final
+  sync after the closing commit.
 
 Not applied, by decision: `unfinished_downloads` stays in the default
 excludes (deferred, `PROGRESS.md` Deferred items), and the `# noqa: S404`
@@ -781,9 +782,12 @@ their expected exception from `SystemExit` to `FileNotFoundError` or
 
 ### Found while fixing
 
-All four were reproduced at the branch tip with a runtime probe; none is
-fixed on this branch. They are the first four Open questions in
-`PROGRESS.md`.
+Each was confirmed with a probe script at the branch tip; none is fixed on
+this branch. The first three are reproduced hazards and the fourth is an
+observation. For the `TypeError` and `IsADirectoryError` shapes in the third
+item the probe stops at `run_backup`; that the exception then escapes an `ALL`
+batch follows from the `except` clauses of `run_all_backups` and `cli.main`.
+They are the first four Open questions in `PROGRESS.md`.
 
 - **Trash replay.** Files reach a desktop trash by being *moved* there, and
   irsync replays that move onto the backup. Because `.Trash-*` is excluded
@@ -814,26 +818,30 @@ fixed on this branch. They are the first four Open questions in
   silently accepted.) A per-drive `except Exception` in `run_all_backups`
   that logs and counts an error would close the whole class.
 - **Non-ASCII in user-facing strings (pre-existing).** The first-run banner
-  in `_format_first_run_preview` contains an em dash and is printed, so it
-  raises `UnicodeEncodeError` on an ASCII-only stdout
-  (`PYTHONIOENCODING=ascii`). The `_require_config` `ValueError` message and
-  the permission-denied log line in `run_backup` also contain one, but they
-  go through logging to stderr, which escapes the character instead of
-  failing. A C locale does not trigger any of this (Python still writes
-  UTF-8 there), so it is mostly theoretical. `--help` itself is now ASCII
-  and guarded by a test.
+  in `_format_first_run_preview` contains an em dash. Under `--yes` it is
+  printed (interactively it goes to `less` via `_page_output`), so it raises
+  `UnicodeEncodeError` on an ASCII-only stdout (`PYTHONIOENCODING=ascii`).
+  The `_require_config` `ValueError` message and the permission-denied log
+  line in `run_backup` also contain one, but they go through logging to
+  stderr, whose `backslashreplace` error handler escapes the character
+  instead of failing. A C locale does not trigger any of this (Python still
+  writes UTF-8 there), so it is mostly theoretical. `--help` itself is now
+  ASCII and guarded by a test.
 
 ### Process lessons
 
-- Two defects in this pass came from prose the controller dictated in the
-  plan, not from the implementers: an em dash in SOURCE's help (it broke
-  `--help` on an ASCII stdout; fixed in `b0a4875`) and an AD-21 sentence
-  that claimed more than the reader does (corrected in `f8ccb99`, then
-  `2d4533c`). Plan-dictated text needs the same accuracy review as code;
-  both were caught only because every task was reviewed against the code.
-- Per-task reviews kept finding real gaps the plan did not anticipate:
-  non-object snapshot lines, the trash replay and the empty baseline. Budget
-  a whole-branch review with runtime probes, not only per-task diff reviews.
+- Two defects in this pass came from prose the orchestrating session wrote
+  into the plan, not from the agents that implemented each task: an em dash
+  in SOURCE's help (it broke `--help` on an ASCII stdout; fixed in
+  `b0a4875`) and an AD-21 sentence that claimed more than the reader does
+  (corrected in `f8ccb99`, then `2d4533c`). Plan-written text needs the same
+  accuracy review as code; both were caught only because every task was
+  reviewed against the code.
+- Per-task reviews found gaps the plan did not anticipate, such as the
+  non-object snapshot lines in Task 9's review, and they noted facets of the
+  other two. But the trash replay and the empty baseline were reproduced only
+  by the final whole-branch review's runtime probes. Budget a whole-branch
+  review with runtime probes, not only per-task diff reviews.
 
 ### Status
 
