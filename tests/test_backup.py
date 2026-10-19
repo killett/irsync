@@ -2182,6 +2182,10 @@ class TestCorruptSnapshotRefusesOnlyThatDrive:
 
         assert rc == EXIT_REFUSED
         assert f"{snap.resolve()}:2:" in caplog.text
+        # Bug caught: advice that leaves the user facing a second,
+        # unexplained refusal (an established backup is a non-empty
+        # destination).
+        assert "--allow-nonempty-dest" in caplog.text
         assert list(dest.iterdir()) == []
         assert snap.read_bytes() == corrupt_bytes
 

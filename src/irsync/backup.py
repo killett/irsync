@@ -613,8 +613,10 @@ def _run_backup_for_endpoints(
             # a normal return code, so run_all_backups counts it as one
             # drive's error and moves on instead of the whole batch dying.
             logging.error(
-                "Refusing: %s. The snapshot cannot be used as a diff baseline; "
-                "move %s aside to treat the next run as a first backup.",
+                "Refusing: %s. The snapshot cannot be used as a diff baseline. "
+                "Move %s out of the source tree to treat the next run as a "
+                "first backup (which needs --allow-nonempty-dest if the "
+                "destination already holds a backup).",
                 e,
                 before_path,
             )
