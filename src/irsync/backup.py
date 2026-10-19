@@ -268,15 +268,23 @@ def _dry_run_preview(cmd: list[str]) -> tuple[str | None, int]:
         return None, rc
 
 
-def _show_preview(changes: Changes, *, interactive: bool) -> None:
-    """Render the preview, paging through ``less`` if interactive."""
-    text = _format_preview(changes)
+def _emit_preview(text: str, *, interactive: bool) -> None:
+    """Show pre-confirmation text: paged when interactive, printed under ``--yes``.
+
+    AD-7: a ``--yes`` (cron) run prints the preview to stdout so the run is
+    auditable in its log, and never pages. Every preview goes through here,
+    so the change preview, the first-run summary, and the ``--no-snapshot``
+    dry-run output cannot drift apart on that rule.
+    """
     if interactive:
         _page_output(text)
     else:
-        # Non-interactive (--yes): still log it so the run is auditable, but
-        # don't bother with the pager.
         print(text)
+
+
+def _show_preview(changes: Changes, *, interactive: bool) -> None:
+    """Render the change preview, paging through ``less`` if interactive."""
+    _emit_preview(_format_preview(changes), interactive=interactive)
 
 
 def _confirm_or_abort(args: argparse.Namespace) -> bool:
@@ -686,11 +694,10 @@ def _run_backup_for_endpoints(
     if changes is not None:
         _show_preview(changes, interactive=not args.yes)
     else:
-        text = _format_first_run_preview(fresh_rows, src_root, dest_root, len(foreign))
-        if args.yes:
-            print(text)
-        else:
-            _page_output(text)
+        _emit_preview(
+            _format_first_run_preview(fresh_rows, src_root, dest_root, len(foreign)),
+            interactive=not args.yes,
+        )
     if not _confirm_or_abort(args):
         logging.info("Aborted by user.")
         return EXIT_ABORTED
@@ -796,12 +803,9 @@ def _run_rsync_only(
         # evidence the real transfer would fare better. Abort before touching
         # the destination.
         return preview_rc
-    if args.yes:
-        print(out)
-    else:
-        _page_output(out)
-        if not _confirm_or_abort(args):
-            return EXIT_ABORTED
+    _emit_preview(out, interactive=not args.yes)
+    if not _confirm_or_abort(args):
+        return EXIT_ABORTED
 
     # Hazard H fix: --dry-run was never consulted on this path, so
     # `--no-snapshot --dry-run` fell through to a real, destructive rsync
