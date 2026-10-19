@@ -17,8 +17,9 @@ nanoseconds since the epoch.
 Fallback behaviour
 ------------------
 If the platform isn't Linux, libc lacks ``statx``, statx fails, or the
-filesystem doesn't report btime (older ext4 without ``-O extent``, FAT,
-NFSv3, etc.), :func:`btime_ns` returns ``-1``. Callers must treat ``-1``
+filesystem doesn't report btime (ext4 with 128-byte inodes — e.g. upgraded
+from ext3 — which have no room for the creation time; FAT; NFSv3; etc.),
+:func:`btime_ns` returns ``-1``. Callers must treat ``-1``
 as "unknown" and fall back to the size+mtime move gate (the pre-5th-pass
 behaviour, which is correct for nanosecond-precision local filesystems).
 """
