@@ -531,3 +531,155 @@ into a hygiene commit. Both are also in `PROGRESS.md`'s Open questions.
   becomes tracked, re-read it as a stranger would.** Its whole prior life
   was spent under the assumption that nobody outside the machine would see
   it, and that assumption is written into the prose.
+
+## 2026-10-18 — whole-repo audit (record, clean up, and fix all approved)
+
+Baseline before any edit: `pixi run pre-commit run --all-files` green,
+`322 passed, 1 skipped`. No file under `src/` or `tests/` had changed since
+the 2026-09-04 pass, so this pass looked for what the three earlier passes
+missed; nothing they settled is re-litigated here. Scope was whole-repo and
+the audit itself ran audit-only; the project owner then approved all three
+follow-ups — record the audit, apply its clean-ups and doc fixes (one commit
+each, gate after each), and fix the four bugs red/green. The work is on
+branch `hygiene-2026-10-18`; plan:
+`docs/superpowers/plans/2026-10-18-hygiene-pass.md`.
+
+Probes worth reusing: an AST scan for functions with no docstring (ruff's
+`D` rules skip `_`-prefixed names, so the gate cannot see the "every
+function has a docstring" rule being broken); read-only ruff runs with rule
+families the project does not select (`RUF100`, `PLR2004`, `PLC0415`,
+`SIM`, `PT`, …); a script checking that every backticked symbol in the docs
+still exists in code; and a direct runtime repro of each suspected bug
+before calling it one.
+
+### Bugs (behavior changes — fixed red/green in this pass)
+
+- **A corrupt snapshot killed a whole `ALL` run.** `read_snapshot` and
+  `_validate_row` raised `SystemExit` (as did `snapshot_tree` for a missing
+  root), which is not an `Exception`, so it escaped `run_all_backups`'
+  handlers and `cli.main`'s refusal boundary. Reproduced with two
+  endpoints, the first holding a malformed snapshot line: process exit 1,
+  the second endpoint never backed up, no summary line, and the message on
+  bare stderr outside logging. Owner's decision: refuse that drive only. A
+  new `SnapshotCorrupt` (`ValueError` subclass) becomes a logged refusal
+  (exit 2) in `_run_backup_for_endpoints`; an `ALL` batch counts it as one
+  error and continues; `snapshot_tree`'s root errors become
+  `FileNotFoundError` / `NotADirectoryError`.
+- **The `Diff:` log line omitted `modified`.** It dates from `b52c107`;
+  `Changes.modified` arrived in `dba3768` and the line was never updated.
+  Reproduced: an edit-only run logged
+  `Diff: 0 dir moves, 0 file moves, 0 created, 0 deleted.` and then
+  re-transferred the file.
+- **The default exclude `.Trash-1000` only matched uid 1000.** Owner's
+  decision: `.Trash-*`. The same default's `unfinished_downloads` (a
+  personal folder name) is **deferred** at the owner's request — see
+  `PROGRESS.md`, Deferred items.
+- **SOURCE's `--help` was wrong under `--snapshot-only`:** it said every
+  bare path without a destination needs a config.
+
+### Clean-ups (strictly behavior-preserving)
+
+- *magic* — `_file_type_char` hand-codes `(mode & 0o170000) == 0o100000`,
+  which is `stat.S_ISREG(mode)`.
+- *magic / redundant* — `cli.main` compares against a literal `"ALL"`
+  while `options.ALL_ARG` exists and `needs_drive_config` uses it.
+- *redundant* — the row type tags `f`/`d`/`l`/`o` are spelled out six
+  times across `snapshot.py` and `diff.py`. `compute_changes`' own
+  comments record that 7th-NEW-H1 and 8th-M2 were exactly `diff.py`'s copy
+  falling behind. One `ROW_TYPES`.
+- *redundant + documentation* — the reserved-root-name check exists in
+  both `snapshot_tree` and `preflight._non_reserved_names`, whose
+  docstring claims the list is "spelled out in exactly one place". AD-5
+  requires the copies to change together. One `is_reserved_root_name`.
+- *redundant* — AD-7 ("print the preview under `--yes`, page it
+  otherwise") is coded three times in `backup.py`. One `_emit_preview`.
+- *documentation* — `_run_backup_for_endpoints`, `_run_rsync_only` and
+  `_build_parser` have no docstrings; `main` has no Args/Returns; and
+  `run_backup`'s Raises omits the `ValueError` / `FileNotFoundError` /
+  `NotADirectoryError` that `run_all_backups` relies on to recognise a
+  skip.
+- *documentation* — comments pointing at context a reader cannot find:
+  "decision 1" (`needs_drive_config`; it exists nowhere in this repo),
+  "Task 3" and "Rule 3" (the mount-safety plan and spec, unnamed), and
+  "this branch" (`run_all_backups`, merged long ago).
+- *documentation* — `statx.py` says btime is missing on "older ext4
+  without `-O extent`"; ext4 reports `i_crtime` only when the field fits in
+  the inode, i.e. on 256-byte inodes. Extents are unrelated.
+
+### Doc drift
+
+- `PROGRESS.md`: all 23 AD bullets sat on one line and rendered as a single
+  bullet; AD-24–AD-30 were missing; AD-6's line still named `--force` as
+  the override for the >50% guard (it has been `--allow-massive-delete`
+  since AD-26); and Current work pointed at
+  `docs/superpowers/plans/2026-07-18-handoff-migration.md`, which has never
+  existed in git history. The dangling pointer is removed by the commit
+  that adds this entry; the AD index has its own task.
+- `docs/design/irsync-architecture.md`: the package-layout tables predate
+  mount-safety and drivecfg — no `preflight.py` row, `options.py`
+  described as a "drive-letter map", a four-flag `cli.py` row, and a tests
+  table missing `test_preflight.py`, `test_main.py` and four `conftest`
+  helpers. The doc never mentioned drivecfg at all; its rationale lived
+  only in a `PROGRESS.md` gotcha. Fix the tables and record the decision as
+  AD-31.
+- This file's 2026-07-31 entry says the `(and N more)` truncation branch is
+  untested; `b342f60` added that test 21 minutes after the entry was
+  written. The entry's `backup.py:665` / `:640` / `:557` references have
+  also drifted. Correct in place.
+- Test comments cite `diff.py:154-161`, `backup.py:401-406` and
+  `backup.py:696`, and "the 16 configured entries" of the pre-drivecfg
+  layout. Anchor them to symbols.
+- `RELEASING.md` still presents the trusted-publisher setup as a step to do
+  before the first release (done 2026-09-06) and describes the autotick
+  bot of a conda-forge feedstock that does not exist (conda-forge was
+  declined).
+
+**Fourth pass running, fourth drift finding — and now the pattern has a
+shape.** Each feature that changed what a module *is* (mount-safety on
+2026-07-31, drivecfg on 2026-08-16) left the architecture doc's
+package-layout tables and `PROGRESS.md`'s AD index behind, because neither
+sits near the code it describes. When a commit adds a module, a flag, or an
+AD, update those two places in the same commit.
+
+### Kept, with reasons
+
+- `# noqa: S404` on `import subprocess` (`backup.py`, `rsync_runner.py`).
+  `RUF100` reports them unused, but S404 is a preview-only rule today, CI
+  installs ruff unpinned, and if S404 becomes stable `select = ["S"]` will
+  enforce it and CI would fail without them. Forward-defensive; kept.
+- `preflight._non_reserved_names`' function-local import (and the
+  `TYPE_CHECKING` import of `Row`): the mount-safety plan records the local
+  import as deliberate insurance against a future import cycle. Kept.
+- `cli.main`'s lazy imports: consistent with lazy config loading. Kept.
+- `build_rsync_command`'s own remote test (`":" in s and not
+  s.startswith("/")`) beside `paths.is_rsync_remote`. They agree on every
+  input that can reach it — local endpoints arrive as resolved absolute
+  paths — but differ on others such as `a/b:c`, and the function is
+  public, so unifying them is an API decision, not a clean-up. Flagged and
+  kept.
+- The truncation limits `10` (the `foreign` list in
+  `_run_backup_for_endpoints`) and `5` (`snapshot_tree`'s skipped-mount
+  warning), each repeated inside one expression; the two adjacent copies of
+  the error-budget check in `run_all_backups`; and the cosmetic probe hits
+  (`SIM105` in `_source_lock`, `C416`/`C420` in `plan_directory_moves`,
+  `RUF059` unused `dir_moves` unpacks in `test_diff.py`, `PT011` broad
+  `pytest.raises` that all assert on the message afterwards, `ERA001` false
+  positives on prose comments). Local and visible; kept.
+- The `.pre-commit-config.yaml` `exclude` for reference scripts absent
+  from this checkout: harmless, and only matters if one is ever staged.
+
+### Environment observations
+
+- CI (`.github/workflows/test.yml`) never runs mypy; only the local
+  pre-commit gate does.
+- pixi pins `python <3.14`, while CI lints and tests on 3.14 and the
+  classifiers claim it.
+- `drivecfg`'s allowed range is `<0.2` in `pixi.toml` but `<1` in
+  `pyproject.toml`: once drivecfg 0.2 ships, CI and the local environment
+  resolve different versions.
+
+### Status
+
+In progress — see `docs/superpowers/plans/2026-10-18-hygiene-pass.md`. The
+Applied list with commit hashes and the final counts are added when the
+plan's wrap-up task closes this entry.

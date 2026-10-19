@@ -1,0 +1,183 @@
+{
+  "planPath": "docs/superpowers/plans/2026-10-18-hygiene-pass.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: Record the audit and this plan",
+      "status": "pending",
+      "description": "**Goal:** The audit findings, the user's decisions, and this plan are committed, and `PROGRESS.md` points at them, so a dead session loses nothing.\n\n**Files:**\n- Modify: `docs/hygiene-notes.md` (append a new `## 2026-10-18 \u2014 ...` entry)\n- Modify: `PROGRESS.md` (Current work block; Deferred items; Gotchas)\n- Create: `docs/superpowers/plans/2026-10-18-hygiene-pass.md` (this file) and `docs/superpowers/plans/2026-10-18-hygiene-pass.md.tasks.json`\n\n**Acceptance Criteria:**\n- [ ] `docs/hygiene-notes.md` has a `## 2026-10-18` entry listing the baseline, every finding with its category and decision, the user's decisions, and a pointer to this plan.\n- [ ] `PROGRESS.md` Current work names this plan as active work and its next action is \"first unchecked task in the plan\".\n- [ ] The dangling pointer to `docs/superpowers/plans/2026-07-18-handoff-migration.md` is gone from `PROGRESS.md`.\n- [ ] `PROGRESS.md` Deferred items has an `unfinished_downloads` bullet.\n- [ ] Gate green; one commit.\n\n**Verify:** `rg -n '2026-10-18' docs/hygiene-notes.md PROGRESS.md && ! rg -q 'handoff-migration' PROGRESS.md && echo OK` \u2192 prints matches then `OK`\n\n```json:metadata\n{\"files\": [\"PROGRESS.md\", \"docs/hygiene-notes.md\", \"docs/superpowers/plans/2026-10-18-hygiene-pass.md\", \"docs/superpowers/plans/2026-10-18-hygiene-pass.md.tasks.json\"], \"verifyCommand\": \"rg -n '2026-10-18' docs/hygiene-notes.md PROGRESS.md && ! rg -q 'handoff-migration' PROGRESS.md && echo OK\", \"acceptanceCriteria\": [\"`docs/hygiene-notes.md` has a `## 2026-10-18` entry listing the baseline, every finding with its category and decision, the user's decisions, and a pointer to this plan.\", \"`PROGRESS.md` Current work names this plan as active work and its next action is \\\"first unchecked task in the plan\\\".\", \"The dangling pointer to `docs/superpowers/plans/2026-07-18-handoff-migration.md` is gone from `PROGRESS.md`.\", \"`PROGRESS.md` Deferred items has an `unfinished_downloads` bullet.\", \"Gate green; one commit.\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: Use stat.S_ISREG for the regular-file test",
+      "status": "pending",
+      "description": "**Goal:** `_file_type_char` tests for a regular file with `stat.S_ISREG(mode)` instead of the hand-written `(mode & 0o170000) == 0o100000`.\n\n**Files:**\n- Modify: `src/irsync/snapshot.py` (`_file_type_char`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n '0o170000|0o100000' src` returns nothing.\n- [ ] `pixi run test` count unchanged from baseline.\n\n**Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/snapshot.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q\", \"acceptanceCriteria\": [\"`rg -n '0o170000|0o100000' src` returns nothing.\", \"`pixi run test` count unchanged from baseline.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Use ALL_ARG in cli.main",
+      "status": "pending",
+      "description": "**Goal:** `cli.main` compares the source argument against `options.ALL_ARG` instead of a second `\"ALL\"` literal.\n\n**Files:**\n- Modify: `src/irsync/cli.py` (`main`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n '== \"ALL\"' src` returns nothing.\n- [ ] User-facing strings mentioning `'ALL'` (help text, the `parser.error` message) are unchanged.\n\n**Verify:** `pixi run python -m pytest tests/test_cli.py tests/test_options.py -q` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/cli.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_cli.py tests/test_options.py -q\", \"acceptanceCriteria\": [\"`rg -n '== \\\"ALL\\\"' src` returns nothing.\", \"User-facing strings mentioning `'ALL'` (help text, the `parser.error` message) are unchanged.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: One definition of the row type tags",
+      "status": "pending",
+      "description": "**Goal:** The four snapshot row type tags (`f`, `d`, `l`, `o`) are defined once in `snapshot.py` (`RowType` / `ROW_TYPES`) and every other spelling uses them. The 7th-NEW-H1 and 8th-M2 bugs were `diff.py`'s copy of this list falling behind.\n\n**Files:**\n- Modify: `src/irsync/snapshot.py` (new `RowType`, `ROW_TYPES`; `Row.type`; `_file_type_char` return type; `_validate_row`)\n- Modify: `src/irsync/diff.py` (`compute_changes` type filters and their comment)\n\n**Acceptance Criteria:**\n- [ ] `rg -n \"\\\"f\\\", \\\"d\\\", \\\"l\\\", \\\"o\\\"|\\\"d\\\", \\\"f\\\", \\\"l\\\", \\\"o\\\"|'f', 'd', 'l', 'o'\" src` matches only the `RowType` definition.\n- [ ] `_validate_row`'s error message text is byte-identical: `(expected one of 'f', 'd', 'l', 'o')`.\n- [ ] mypy strict clean.\n\n**Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q` \u2192 all pass, then `pixi run typecheck` \u2192 `Success`\n\n```json:metadata\n{\"files\": [\"src/irsync/diff.py\", \"src/irsync/snapshot.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_snapshot.py tests/test_diff.py -q\", \"acceptanceCriteria\": [\"`rg -n \\\"\\\\\\\"f\\\\\\\", \\\\\\\"d\\\\\\\", \\\\\\\"l\\\\\\\", \\\\\\\"o\\\\\\\"|\\\\\\\"d\\\\\\\", \\\\\\\"f\\\\\\\", \\\\\\\"l\\\\\\\", \\\\\\\"o\\\\\\\"|'f', 'd', 'l', 'o'\\\" src` matches only the `RowType` definition.\", \"`_validate_row`'s error message text is byte-identical: `(expected one of 'f', 'd', 'l', 'o')`.\", \"mypy strict clean.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        2
+      ]
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: One predicate for irsync's reserved root names",
+      "status": "pending",
+      "description": "**Goal:** \"Is this root-level name irsync's own file?\" is answered by one function, `snapshot.is_reserved_root_name`, used by both `snapshot_tree` and `preflight._non_reserved_names` (AD-5 requires every copy to change together).\n\n**Files:**\n- Modify: `src/irsync/snapshot.py` (new `is_reserved_root_name`; `snapshot_tree` skip)\n- Modify: `src/irsync/preflight.py` (`_non_reserved_names` body and docstring)\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'SNAPSHOT_FILENAME, LOCKFILE_NAME' src` matches only `is_reserved_root_name`.\n- [ ] `_non_reserved_names`' docstring no longer claims a list is \"spelled out in exactly one place\" that it wasn't; it names `is_reserved_root_name`.\n- [ ] Pass count unchanged.\n\n**Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_preflight.py tests/test_backup.py -q` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/preflight.py\", \"src/irsync/snapshot.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_snapshot.py tests/test_preflight.py tests/test_backup.py -q\", \"acceptanceCriteria\": [\"`rg -n 'SNAPSHOT_FILENAME, LOCKFILE_NAME' src` matches only `is_reserved_root_name`.\", \"`_non_reserved_names`' docstring no longer claims a list is \\\"spelled out in exactly one place\\\" that it wasn't; it names `is_reserved_root_name`.\", \"Pass count unchanged.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        3
+      ]
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: One helper for the AD-7 preview rule",
+      "status": "pending",
+      "description": "**Goal:** \"Page the preview interactively, print it under `--yes`\" (AD-7) lives in one helper, `_emit_preview`, used by the change preview, the first-run summary, and the `--no-snapshot` dry-run output.\n\n**Files:**\n- Modify: `src/irsync/backup.py` (`_show_preview`, the first-run branch of `_run_backup_for_endpoints`, `_run_rsync_only`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'print\\((text|out)\\)' src/irsync/backup.py` matches only inside `_emit_preview` (and `_page_output`'s no-`less` fallback, which prints `text`).\n- [ ] Confirmation and abort behavior unchanged (`_confirm_or_abort` still returns True under `--yes`).\n- [ ] Pass count unchanged.\n\n**Verify:** `pixi run python -m pytest tests/test_backup.py tests/test_integration.py -q` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_backup.py tests/test_integration.py -q\", \"acceptanceCriteria\": [\"`rg -n 'print\\\\((text|out)\\\\)' src/irsync/backup.py` matches only inside `_emit_preview` (and `_page_output`'s no-`less` fallback, which prints `text`).\", \"Confirmation and abort behavior unchanged (`_confirm_or_abort` still returns True under `--yes`).\", \"Pass count unchanged.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        4
+      ]
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: The Diff summary counts modified files",
+      "status": "pending",
+      "description": "**Goal:** The `Diff:` log line reports `modified` alongside moves, creations, and deletions.\n\n**Files:**\n- Modify: `src/irsync/backup.py` (the `logging.info(\"Diff: ...\")` call in `_run_backup_for_endpoints`)\n- Test: `tests/test_backup.py` (new class `TestDiffSummaryLog`)\n\n**Acceptance Criteria:**\n- [ ] A modification-only run logs exactly `Diff: 0 dir moves, 0 file moves, 1 modified, 0 created, 0 deleted.`\n- [ ] The new test fails before the fix (old line lacks `modified`) and passes after.\n\n**Verify:** `pixi run python -m pytest tests/test_backup.py -q -k DiffSummaryLog` \u2192 1 passed\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"tests/test_backup.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_backup.py -q -k DiffSummaryLog\", \"acceptanceCriteria\": [\"A modification-only run logs exactly `Diff: 0 dir moves, 0 file moves, 1 modified, 0 created, 0 deleted.`\", \"The new test fails before the fix (old line lacks `modified`) and passes after.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        5
+      ]
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: SOURCE --help names the --snapshot-only exception",
+      "status": "pending",
+      "description": "**Goal:** The SOURCE help no longer claims every destination-less bare path needs a config; it states the `--snapshot-only` exception (`needs_drive_config`'s last rule).\n\n**Files:**\n- Modify: `src/irsync/cli.py` (`_build_parser`, the `source_arg` help)\n- Test: `tests/test_cli.py` (new test)\n\n**Acceptance Criteria:**\n- [ ] The `source_arg` help mentions `--snapshot-only`.\n- [ ] The test fails before the change and passes after.\n\n**Verify:** `pixi run python -m pytest tests/test_cli.py -q -k snapshot_only_exception` \u2192 1 passed\n\n```json:metadata\n{\"files\": [\"src/irsync/cli.py\", \"tests/test_cli.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_cli.py -q -k snapshot_only_exception\", \"acceptanceCriteria\": [\"The `source_arg` help mentions `--snapshot-only`.\", \"The test fails before the change and passes after.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        6
+      ]
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: Exclude every user's desktop trash",
+      "status": "pending",
+      "description": "**Goal:** The default exclude list skips `.Trash-*` (any uid) instead of only `.Trash-1000`.\n\n**Files:**\n- Modify: `src/irsync/options.py` (`Options.exclude_dirs` default and its attribute doc)\n- Test: `tests/test_backup.py` (new class `TestDefaultExcludes`)\n\n**Acceptance Criteria:**\n- [ ] A default run does not transfer `.Trash-1000/` or `.Trash-1001/`, and does transfer ordinary files.\n- [ ] The `.Trash-1001` case fails before the fix; both pass after.\n- [ ] `unfinished_downloads` stays in the default list (user decision: deferred).\n\n**Verify:** `pixi run python -m pytest tests/test_backup.py -q -k DefaultExcludes` \u2192 2 passed\n\n```json:metadata\n{\"files\": [\"src/irsync/options.py\", \"tests/test_backup.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_backup.py -q -k DefaultExcludes\", \"acceptanceCriteria\": [\"A default run does not transfer `.Trash-1000/` or `.Trash-1001/`, and does transfer ordinary files.\", \"The `.Trash-1001` case fails before the fix; both pass after.\", \"`unfinished_downloads` stays in the default list (user decision: deferred).\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        7
+      ]
+    },
+    {
+      "id": 9,
+      "subject": "Task 9: A corrupt snapshot refuses only its own drive",
+      "status": "pending",
+      "description": "**Goal:** A malformed snapshot raises `SnapshotCorrupt` (not `SystemExit`); `_run_backup_for_endpoints` turns it into a logged refusal (exit 2) that leaves the destination and the corrupt file untouched; an `ALL` batch counts it as one error and continues. `snapshot_tree`'s missing/not-a-directory root raises `FileNotFoundError`/`NotADirectoryError`.\n\n**Files:**\n- Modify: `src/irsync/snapshot.py` (new `SnapshotCorrupt`; `read_snapshot`, `_validate_row`, `snapshot_tree` raises and docstrings)\n- Modify: `src/irsync/backup.py` (import `SnapshotCorrupt`; new `except` after `SnapshotMismatch` in `_run_backup_for_endpoints`)\n- Test: `tests/test_snapshot.py` (four `pytest.raises(SystemExit)` sites, plus two new tests)\n- Test: `tests/test_backup.py` (new class `TestCorruptSnapshotRefusesOnlyThatDrive`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'SystemExit' src` matches only `rsync_runner.py`'s cleanup comment and `__main__.py`.\n- [ ] Single run with a corrupt snapshot: returns 2, logs an error naming the snapshot path and line, no rsync, dest unchanged, the corrupt file byte-identical.\n- [ ] `ALL` with a corrupt snapshot on B and a healthy C: returns 1, C is backed up, summary says `backed up=1 (C)` and `errors=1`.\n- [ ] Every new/changed test fails before the fix and passes after.\n\n**Verify:** `pixi run python -m pytest tests/test_snapshot.py tests/test_backup.py -q -k \"Corrupt or rejects or missing_root or not_a_directory or malformed or corrupted\"` \u2192 all pass\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"src/irsync/snapshot.py\", \"tests/test_backup.py\", \"tests/test_snapshot.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_snapshot.py tests/test_backup.py -q -k \\\"Corrupt or rejects or missing_root or not_a_directory or malformed or corrupted\\\"\", \"acceptanceCriteria\": [\"`rg -n 'SystemExit' src` matches only `rsync_runner.py`'s cleanup comment and `__main__.py`.\", \"Single run with a corrupt snapshot: returns 2, logs an error naming the snapshot path and line, no rsync, dest unchanged, the corrupt file byte-identical.\", \"`ALL` with a corrupt snapshot on B and a healthy C: returns 1, C is backed up, summary says `backed up=1 (C)` and `errors=1`.\", \"Every new/changed test fails before the fix and passes after.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        8
+      ]
+    },
+    {
+      "id": 10,
+      "subject": "Task 10: Document the orchestrator and CLI entry points",
+      "status": "pending",
+      "description": "**Goal:** `_run_backup_for_endpoints`, `_run_rsync_only`, and `_build_parser` have Google-style docstrings; `main` gains Args/Returns/Raises; `run_backup`'s Raises lists the `ValueError`/`FileNotFoundError`/`NotADirectoryError` that `run_all_backups` relies on.\n\n**Files:**\n- Modify: `src/irsync/backup.py` (`run_backup`, `_run_backup_for_endpoints`, `_run_rsync_only`)\n- Modify: `src/irsync/cli.py` (`_build_parser`, `main`)\n\n**Acceptance Criteria:**\n- [ ] The AST probe from the audit lists no module-level function without a docstring in `backup.py`/`cli.py`.\n- [ ] Docstrings only; no code change.\n\n**Verify:** `pixi run python -I -c \"import ast,pathlib;[print(f,n.name) for f in ('src/irsync/backup.py','src/irsync/cli.py') for n in ast.parse(pathlib.Path(f).read_text()).body if isinstance(n,ast.FunctionDef) and not ast.get_docstring(n)]\"` \u2192 no output\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"src/irsync/cli.py\"], \"verifyCommand\": \"pixi run python -I -c \\\"import ast,pathlib;[print(f,n.name) for f in ('src/irsync/backup.py','src/irsync/cli.py') for n in ast.parse(pathlib.Path(f).read_text()).body if isinstance(n,ast.FunctionDef) and not ast.get_docstring(n)]\\\"\", \"acceptanceCriteria\": [\"The AST probe from the audit lists no module-level function without a docstring in `backup.py`/`cli.py`.\", \"Docstrings only; no code change.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        9
+      ]
+    },
+    {
+      "id": 11,
+      "subject": "Task 11: Replace plan-relative references in code comments",
+      "status": "pending",
+      "description": "**Goal:** Four comments that point at plan/branch context a reader cannot find from the code say what they mean instead.\n\n**Files:**\n- Modify: `src/irsync/options.py` (`needs_drive_config` docstring, \"decision 1\")\n- Modify: `src/irsync/backup.py` (`_format_first_run_preview` comment \"Task 3\"; destination-gate comment \"Rule 3\"; `run_all_backups` docstring \"this branch\")\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src` returns nothing.\n\n**Verify:** `rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src; echo \"exit=$?\"` \u2192 `exit=1`\n\n```json:metadata\n{\"files\": [\"src/irsync/backup.py\", \"src/irsync/options.py\"], \"verifyCommand\": \"rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src; echo \\\"exit=$?\\\"\", \"acceptanceCriteria\": [\"`rg -n 'decision 1|Task [0-9]|Rule [0-9]|this branch' src` returns nothing.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        10
+      ]
+    },
+    {
+      "id": 12,
+      "subject": "Task 12: Correct the ext4 btime condition in statx's docstri",
+      "status": "pending",
+      "description": "**Goal:** `statx.py` says ext4 lacks btime when its inodes are 128 bytes (no room for `i_crtime`; ext4 only reports it when the field fits in the inode), not \"without `-O extent`\".\n\n**Files:**\n- Modify: `src/irsync/statx.py` (module docstring, \"Fallback behaviour\")\n\n**Acceptance Criteria:**\n- [ ] `rg -n 'extent' src/irsync/statx.py` returns nothing; the text names 128-byte inodes.\n\n**Verify:** `rg -n '128-byte' src/irsync/statx.py` \u2192 one match\n\n```json:metadata\n{\"files\": [\"src/irsync/statx.py\"], \"verifyCommand\": \"rg -n '128-byte' src/irsync/statx.py\", \"acceptanceCriteria\": [\"`rg -n 'extent' src/irsync/statx.py` returns nothing; the text names 128-byte inodes.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        11
+      ]
+    },
+    {
+      "id": 13,
+      "subject": "Task 13: Refresh the architecture doc's package-layout table",
+      "status": "pending",
+      "description": "**Goal:** The `src/irsync/` and `tests/` tables in `docs/design/irsync-architecture.md` match the code after mount-safety, drivecfg, and this pass.\n\n**Files:**\n- Modify: `docs/design/irsync-architecture.md` (section \"Package layout\")\n\n**Acceptance Criteria:**\n- [ ] A `preflight.py` row exists; the `options.py` row mentions `drivecfg`, `needs_drive_config`, `resolve_source` and no \"drive-letter map\"; the `cli.py` row describes lazy config loading and both parse-time rejections.\n- [ ] `snapshot.py` row mentions `ROW_TYPES`, `is_reserved_root_name`, `SnapshotCorrupt`; `backup.py` row mentions the refusal guards and `_emit_preview`.\n- [ ] The tests table lists `test_preflight.py` and `test_main.py`, and `conftest.py`'s row lists `make_tree`, `make_options`, `basic_options`, `write_drive_config`, `cli_args`, `subprocess_pythonpath`, `tree_signature`, `inode_for`.\n\n**Verify:** `rg -c 'preflight.py|test_main.py|drivecfg' docs/design/irsync-architecture.md` \u2192 \u2265 3\n\n```json:metadata\n{\"files\": [\"docs/design/irsync-architecture.md\"], \"verifyCommand\": \"rg -c 'preflight.py|test_main.py|drivecfg' docs/design/irsync-architecture.md\", \"acceptanceCriteria\": [\"A `preflight.py` row exists; the `options.py` row mentions `drivecfg`, `needs_drive_config`, `resolve_source` and no \\\"drive-letter map\\\"; the `cli.py` row describes lazy config loading and both parse-time rejections.\", \"`snapshot.py` row mentions `ROW_TYPES`, `is_reserved_root_name`, `SnapshotCorrupt`; `backup.py` row mentions the refusal guards and `_emit_preview`.\", \"The tests table lists `test_preflight.py` and `test_main.py`, and `conftest.py`'s row lists `make_tree`, `make_options`, `basic_options`, `write_drive_config`, `cli_args`, `subprocess_pythonpath`, `tree_signature`, `inode_for`.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        12
+      ]
+    },
+    {
+      "id": 14,
+      "subject": "Task 14: Record the drivecfg decision as AD-31",
+      "status": "pending",
+      "description": "**Goal:** The architecture doc, which claims to hold every decision, records where the drive layout comes from and when it is loaded.\n\n**Files:**\n- Modify: `docs/design/irsync-architecture.md` (new `### 31.` after `### 30.`)\n\n**Acceptance Criteria:**\n- [ ] `### 31.` exists, covering: layout from `drivecfg.DriveConfig`; `needs_drive_config`'s rules decided from argument text alone; shorthands fail closed with exit 2; `base_dir` default is only the mount-gate root; explicit config (presence, not truthiness) must exist; broken config always refuses; the known duplicated predicate in `cli.main`.\n\n**Verify:** `rg -n '^### 31\\.' docs/design/irsync-architecture.md` \u2192 one match\n\n```json:metadata\n{\"files\": [\"docs/design/irsync-architecture.md\"], \"verifyCommand\": \"rg -n '^### 31\\\\.' docs/design/irsync-architecture.md\", \"acceptanceCriteria\": [\"`### 31.` exists, covering: layout from `drivecfg.DriveConfig`; `needs_drive_config`'s rules decided from argument text alone; shorthands fail closed with exit 2; `base_dir` default is only the mount-gate root; explicit config (presence, not truthiness) must exist; broken config always refuses; the known duplicated predicate in `cli.main`.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        13
+      ]
+    },
+    {
+      "id": 15,
+      "subject": "Task 15: One line per AD in PROGRESS.md, through AD-31",
+      "status": "pending",
+      "description": "**Goal:** `PROGRESS.md`'s Cross-cutting decisions renders one bullet per AD and covers AD-24 to AD-31.\n\n**Files:**\n- Modify: `PROGRESS.md` (Cross-cutting decisions; \"all 30 decisions\" \u2192 \"all 31\")\n\n**Acceptance Criteria:**\n- [ ] 31 lines start with `- **AD-`; no line holds two.\n- [ ] Current work says \"all 31 decisions\".\n\n**Verify:** `rg -c '^- \\*\\*AD-' PROGRESS.md` \u2192 `31`\n\n```json:metadata\n{\"files\": [\"PROGRESS.md\"], \"verifyCommand\": \"rg -c '^- \\\\*\\\\*AD-' PROGRESS.md\", \"acceptanceCriteria\": [\"31 lines start with `- **AD-`; no line holds two.\", \"Current work says \\\"all 31 decisions\\\".\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        14
+      ]
+    },
+    {
+      "id": 16,
+      "subject": "Task 16: Correct the 2026-07-31 hygiene-notes entry in place",
+      "status": "pending",
+      "description": "**Goal:** The entry's \"truncation branch is untested\" claim (false since `b342f60`) and its drifted `backup.py:NNN` references are corrected.\n\n**Files:**\n- Modify: `docs/hygiene-notes.md` (2026-07-31 entry only)\n\n**Acceptance Criteria:**\n- [ ] The truncation bullet is marked corrected, names `test_walk_reports_truncated_count_past_five_skipped_dirs` and `b342f60`, and keeps the still-true `include_other=True` + boundary gap.\n- [ ] `backup.py:665`, `backup.py:640`, `backup.py:557` no longer appear (the `backup.py:696` mention in the 2026-08-01 entry describes history and stays).\n\n**Verify:** `rg -n 'backup\\.py:(665|640|557)' docs/hygiene-notes.md; echo \"exit=$?\"` \u2192 `exit=1`\n\n```json:metadata\n{\"files\": [\"docs/hygiene-notes.md\"], \"verifyCommand\": \"rg -n 'backup\\\\.py:(665|640|557)' docs/hygiene-notes.md; echo \\\"exit=$?\\\"\", \"acceptanceCriteria\": [\"The truncation bullet is marked corrected, names `test_walk_reports_truncated_count_past_five_skipped_dirs` and `b342f60`, and keeps the still-true `include_other=True` + boundary gap.\", \"`backup.py:665`, `backup.py:640`, `backup.py:557` no longer appear (the `backup.py:696` mention in the 2026-08-01 entry describes history and stays).\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        15
+      ]
+    },
+    {
+      "id": 17,
+      "subject": "Task 17: Fix drifted references in test comments",
+      "status": "pending",
+      "description": "**Goal:** Test comments stop citing line numbers that moved and a \"16 configured entries\" layout that no longer exists.\n\n**Files:**\n- Modify: `tests/test_diff.py` (comment in `test_8th_type_change_at_same_path_does_not_silently_lose_path`)\n- Modify: `tests/test_backup.py` (comments in `test_5th_snapshot_not_persisted_when_rsync_fails`, `TestNoSnapshotDryRunHonored` docstring, `test_missing_drive_is_skipped_without_failing_the_run`)\n\n**Acceptance Criteria:**\n- [ ] `rg -n '\\.py:\\d' tests` matches only the integration test's reference `test_backup.py:test_5th_m1_...` (a test name, not a line).\n- [ ] `rg -n '16 configured' tests` returns nothing.\n\n**Verify:** `rg -n '\\b(backup|diff)\\.py:\\d+' tests; echo \"exit=$?\"` \u2192 `exit=1`\n\n```json:metadata\n{\"files\": [\"tests/test_backup.py\", \"tests/test_diff.py\"], \"verifyCommand\": \"rg -n '\\\\b(backup|diff)\\\\.py:\\\\d+' tests; echo \\\"exit=$?\\\"\", \"acceptanceCriteria\": [\"`rg -n '\\\\.py:\\\\d' tests` matches only the integration test's reference `test_backup.py:test_5th_m1_...` (a test name, not a line).\", \"`rg -n '16 configured' tests` returns nothing.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        16
+      ]
+    },
+    {
+      "id": 18,
+      "subject": "Task 18: Bring RELEASING.md up to date",
+      "status": "pending",
+      "description": "**Goal:** RELEASING.md stops presenting the done trusted-publisher setup as pending and stops describing a conda-forge feedstock that does not exist.\n\n**Files:**\n- Modify: `RELEASING.md` (sections \"One-time setup: PyPI Trusted Publisher\" and \"conda-forge\")\n\n**Acceptance Criteria:**\n- [ ] The trusted-publisher section says it was done on 2026-09-06 and later releases need no PyPI-side setup.\n- [ ] The conda-forge section says irsync is deliberately not on conda-forge because `drivecfg` isn't, and when to revisit.\n\n**Verify:** `rg -n '2026-09-06|not on conda-forge' RELEASING.md` \u2192 \u2265 2 matches\n\n```json:metadata\n{\"files\": [\"RELEASING.md\"], \"verifyCommand\": \"rg -n '2026-09-06|not on conda-forge' RELEASING.md\", \"acceptanceCriteria\": [\"The trusted-publisher section says it was done on 2026-09-06 and later releases need no PyPI-side setup.\", \"The conda-forge section says irsync is deliberately not on conda-forge because `drivecfg` isn't, and when to revisit.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        17
+      ]
+    },
+    {
+      "id": 19,
+      "subject": "Task 19: Close the audit record",
+      "status": "pending",
+      "description": "**Goal:** The 2026-10-18 hygiene-notes entry lists what was applied (with commit hashes), what was kept and why, and the final counts; `PROGRESS.md` returns to maintenance with a correct next action; this plan's checkboxes and `.tasks.json` are complete.\n\n**Files:**\n- Modify: `docs/hygiene-notes.md` (2026-10-18 entry)\n- Modify: `PROGRESS.md` (Current work)\n- Modify: `docs/superpowers/plans/2026-10-18-hygiene-pass.md` and its `.tasks.json`\n\n**Acceptance Criteria:**\n- [ ] The entry has an \"Applied\" list naming every commit from Tasks 1\u201318 by hash, a \"Bugs fixed\" list, the kept items, and the before/after test counts as reported by pytest.\n- [ ] Every path, symbol, and hash in the entry is re-checked against the repo after writing (`git show --stat <hash>` for each hash; `rg` for each symbol).\n- [ ] `pixi run pre-commit run --all-files` and `pixi run test-cov` green; `git status --short` clean after the commit.\n\n**Verify:** `pixi run test-cov 2>&1 | tail -3` \u2192 `N passed` with N = baseline + new tests, then `git status --short` \u2192 empty\n\n```json:metadata\n{\"files\": [\"PROGRESS.md\", \"docs/hygiene-notes.md\", \"docs/superpowers/plans/2026-10-18-hygiene-pass.md\"], \"verifyCommand\": \"pixi run test-cov 2>&1 | tail -3\", \"acceptanceCriteria\": [\"The entry has an \\\"Applied\\\" list naming every commit from Tasks 1\\u201318 by hash, a \\\"Bugs fixed\\\" list, the kept items, and the before/after test counts as reported by pytest.\", \"Every path, symbol, and hash in the entry is re-checked against the repo after writing (`git show --stat <hash>` for each hash; `rg` for each symbol).\", \"`pixi run pre-commit run --all-files` and `pixi run test-cov` green; `git status --short` clean after the commit.\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        18
+      ]
+    }
+  ],
+  "lastUpdated": "2026-10-19T04:40:51.164590+00:00"
+}
