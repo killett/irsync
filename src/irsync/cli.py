@@ -12,6 +12,12 @@ from irsync import __version__
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the irsync argument parser.
+
+    Returns:
+        The parser :func:`main` uses; built separately so tests can inspect
+        its help text without running a backup.
+    """
     parser = argparse.ArgumentParser(
         prog="irsync",
         description=(
@@ -149,7 +155,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point. Returns the process exit code."""
+    """CLI entry point. Returns the process exit code.
+
+    Args:
+        argv: Arguments to parse; defaults to ``sys.argv[1:]``.
+
+    Returns:
+        0 on success or when only help was shown;
+        :data:`~irsync.backup.EXIT_REFUSED` (2) for a refused or invalid
+        invocation; :data:`~irsync.backup.EXIT_LOCK_HELD` (75) when another
+        run holds the lock; :data:`~irsync.backup.EXIT_ABORTED` (130) when
+        the user declines; 1 when an ``ALL`` run had a failing drive;
+        otherwise rsync's own exit code.
+
+    Raises:
+        SystemExit: From argparse, for ``--help``, ``--version``, and
+            invalid flags.
+    """
     from irsync.backup import EXIT_REFUSED, run_all_backups, run_backup
     from irsync.options import ALL_ARG, Options, needs_drive_config
 

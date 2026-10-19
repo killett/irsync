@@ -41,7 +41,8 @@ def build_rsync_command(
         source: Source endpoint (local path with trailing slash, or ``host:/path/``).
         dest: Destination endpoint.
         dry_run: If True, append ``--dry-run``.
-        exclude_dirs: Directory names to pass with ``--exclude``.
+        exclude_dirs: Names or rsync patterns to pass with ``--exclude``; each
+            matches at any depth.
         no_exclude: If True, ignore ``exclude_dirs`` and transfer everything under the source root (other than the reserved-namespace files).
         ssh_port: Optional SSH port for remote endpoints.
         ssh_key: Optional SSH key path for remote endpoints.

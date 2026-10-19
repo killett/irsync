@@ -334,6 +334,15 @@ def run_backup(
             it is exempt). Checked up front so a missing rsync install
             surfaces as a clean refusal rather than a ``FileNotFoundError``
             traceback from deep inside ``run_dry_run``/``run_real_sync``.
+        ValueError: If the arguments cannot be resolved — an empty source,
+            an unconfigured drive id or endpoint, a shorthand with no config
+            loaded, remote-to-remote, or identical or nested paths (from
+            :func:`~irsync.options.resolve_endpoints` /
+            :func:`~irsync.options.resolve_source`).
+        FileNotFoundError: If a local source, or a destination's parent,
+            does not exist. :func:`run_all_backups` treats this as a skip.
+        NotADirectoryError: If a local endpoint is not a directory. Also a
+            skip in :func:`run_all_backups`.
     """
     # --snapshot-only doesn't need a destination at all — it just records the
     # current state of the source for use as a future baseline. Route around
@@ -518,6 +527,31 @@ def _run_backup_for_endpoints(
     options: Options,
     args: argparse.Namespace,
 ) -> int:
+    """Run the snapshot, diff, replay, rsync, persist pipeline for one pair.
+
+    Called with the source lock already held (local source) or with no lock
+    (remote source). The order of the steps is load-bearing — AD-2's
+    no-change short-circuit, the refusal guards (AD-6, AD-25, AD-28),
+    AD-22's deferred destination cleanup, and AD-15's persist order — so
+    add new work inside the step it belongs to rather than reordering them.
+
+    Args:
+        endpoints: The resolved source/destination pair.
+        options: Path knobs, including the default exclude list.
+        args: Parsed CLI namespace.
+
+    Returns:
+        0 on success or when there was nothing to do,
+        :data:`EXIT_REFUSED` when a guard refuses (including a corrupt
+        snapshot), :data:`EXIT_ABORTED` when the user declines, otherwise
+        rsync's own non-zero exit code.
+
+    Raises:
+        UnsafeDestination: If there is no usable baseline and the local
+            destination cannot be listed.
+        PermissionError: If a read or write is denied; :func:`run_backup`
+            turns this into a refusal.
+    """
     src_str = with_trailing_slash(endpoints.source, remote=endpoints.source_is_remote)
     dest_str = with_trailing_slash(endpoints.dest, remote=endpoints.dest_is_remote)
     logging.info(
@@ -799,6 +833,25 @@ def _run_rsync_only(
     options: Options,
     args: argparse.Namespace,
 ) -> int:
+    """Run rsync directly, with no snapshot layer.
+
+    Used for ``--no-snapshot`` and for a remote source. Always runs the
+    dry-run first so there is a preview to show (NEW-M1), stops after it
+    under ``--dry-run`` (hazard H, AD-30), and otherwise runs the real
+    transfer.
+
+    Args:
+        src_str: Source endpoint, with its trailing slash.
+        dest_str: Destination endpoint, with its trailing slash.
+        options: Path knobs, including the default exclude list.
+        args: Parsed CLI namespace.
+
+    Returns:
+        0 on success (including a completed ``--dry-run``),
+        :data:`EXIT_ABORTED` when the user declines, otherwise the failing
+        rsync run's exit code (:data:`EXIT_REFUSED` for a signal-killed
+        preview).
+    """
     dry_cmd = build_rsync_command(
         source=src_str,
         dest=dest_str,
@@ -887,9 +940,10 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
     ``resolve_endpoints``/``check_mounted``, before ``run_backup``'s own
     try/except is entered — would otherwise escape uncaught here and abort
     the whole batch instead of just the one drive. Only a real backup
-    failure, an unmounted/unreadable destination, or an unreadable source
-    makes this return 1; a user abort propagates :data:`EXIT_ABORTED` and
-    stops the remaining drives.
+    failure (including a drive refused by a guard, such as one whose
+    snapshot is corrupt), an unmounted/unreadable destination, or an
+    unreadable source makes this return 1; a user abort propagates
+    :data:`EXIT_ABORTED` and stops the remaining drives.
 
     Both the skipped and the successfully-backed-up entries are named in the
     summary log line so a cron log records what actually happened.
