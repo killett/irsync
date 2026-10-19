@@ -330,6 +330,11 @@ def read_snapshot(
 
         if isinstance(first, dict) and "_meta" in first:
             meta = first["_meta"]
+            if not isinstance(meta, dict):
+                raise SnapshotCorrupt(
+                    f"Malformed provenance header in {file}:{first_lineno}: "
+                    "_meta is not an object"
+                )
             header = Header(
                 source_root=meta.get("source_root", ""),
                 irsync_version=meta.get("irsync_version", ""),
@@ -357,13 +362,31 @@ def read_snapshot(
     return header, rows
 
 
-def _validate_row(obj: dict[str, object], file: Path, lineno: int) -> Row:
+def _validate_row(obj: object, file: Path, lineno: int) -> Row:
     """Validate a parsed row dict and apply legacy-snapshot defaults.
 
     Applied to every row :func:`read_snapshot` parses, headered or legacy
-    headerless. Raises :class:`SnapshotCorrupt` with a precise location on
+    headerless. Refuses a row with a precise location on a non-object value,
     missing keys or an invalid type tag (7th-M2).
+
+    Args:
+        obj: Whatever :func:`json.loads` returned for the line; only a JSON
+            object is a valid row.
+        file: Snapshot path, for error messages.
+        lineno: 1-based line number of ``obj`` within ``file``.
+
+    Returns:
+        The row, with ``mtime_ns`` and ``btime_ns`` defaulted to ``-1`` when
+        an older snapshot lacks them.
+
+    Raises:
+        SnapshotCorrupt: If ``obj`` is not a JSON object, lacks a required
+            key, or has an unknown type tag.
     """
+    if not isinstance(obj, dict):
+        raise SnapshotCorrupt(
+            f"Expected a JSON object in {file}:{lineno}, got {type(obj).__name__}"
+        )
     for k in ("dev", "ino", "type", "nlink", "size", "path"):
         if k not in obj:
             raise SnapshotCorrupt(f"Missing key '{k}' in {file}:{lineno}")

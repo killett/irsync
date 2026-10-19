@@ -179,6 +179,30 @@ class TestWriteReadRoundtrip:
         with pytest.raises(SnapshotCorrupt, match=":1:"):
             read_snapshot(out, expected_source_root=tmp_path)
 
+    @pytest.mark.parametrize("row_json", ["42", "null", "[1]", '"x"'])
+    def test_non_object_row_is_corrupt(self, tmp_path, row_json):
+        # Behavior: any non-object row is a corrupt snapshot.
+        # Bug caught: a scalar row (42, null) raised TypeError from the
+        # key-membership test, which escapes run_all_backups and kills an
+        # ALL batch. [1] and "x" already raised SnapshotCorrupt; they stay
+        # as guards so the isinstance check is not narrowed to scalars.
+        out = tmp_path / "bad_row.jsonl"
+        header_line = (
+            '{"_meta":{"source_root":"' + str(tmp_path.resolve()) + '",'
+            '"irsync_version":"x","created_at_utc":"x"}}\n'
+        )
+        out.write_text(header_line + row_json + "\n", encoding="utf-8")
+        with pytest.raises(SnapshotCorrupt, match=r"bad_row\.jsonl:2\b"):
+            read_snapshot(out, expected_source_root=tmp_path)
+
+    def test_non_object_meta_header_is_corrupt(self, tmp_path):
+        # Bug caught: a header whose "_meta" is not an object raised
+        # AttributeError on meta.get, escaping run_all_backups.
+        out = tmp_path / "bad_meta.jsonl"
+        out.write_text('{"_meta": 5}\n', encoding="utf-8")
+        with pytest.raises(SnapshotCorrupt, match=":1:"):
+            read_snapshot(out, expected_source_root=tmp_path)
+
     def test_7th_m2_read_snapshot_rejects_invalid_type_value(self, tmp_path):
         # 7th-M2: a corrupted snapshot row with an unknown type ("x", "")
         # was silently appended; later compute_changes filtered it out via
