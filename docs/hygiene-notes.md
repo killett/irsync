@@ -788,12 +788,13 @@ this branch. The first three are reproduced hazards and the fourth is an
 observation. For the `TypeError` and `IsADirectoryError` shapes in the third
 item the probe stops at `run_backup`; that the exception then escapes an `ALL`
 batch follows from the `except` clauses of `run_all_backups` and `cli.main`.
-They are the first four Open questions in `PROGRESS.md`.
+They were filed as the first four Open questions in `PROGRESS.md`; the
+trash replay and the empty baseline have since been fixed (below).
 
 - **Trash replay.** Files reach a desktop trash by being *moved* there, and
-  irsync replays that move onto the backup. Because `.Trash-*` is excluded
-  from the rsync, `--delete-before` never removes the replayed copy, so the
-  deleted file stays on the backup even after the trash is emptied. The
+  irsync replayed that move onto the backup. Because `.Trash-*` is excluded
+  from the rsync, `--delete-before` never removed the replayed copy, so the
+  deleted file stayed on the backup even after the trash was emptied. The
   probe moved a file into `.Trash-1001/files/`, backed up, emptied the
   trash, and backed up again: the file was still on the destination. With
   the old default and the trash dir named `.Trash-1000`, the same file also
@@ -802,6 +803,12 @@ They are the first four Open questions in `PROGRESS.md`.
   `.Trash-*` default (the owner's decision) extends it to every uid. Root
   fix for a later pass: drop planned moves whose target falls under an
   excluded name, or apply the exclude list in the snapshot walk.
+  **Fixed on 2026-10-19** in `cd277ea` (AD-32), by a variant of the second
+  option: the snapshot walk still records everything, and `run_backup`
+  drops excluded rows from both snapshots before diffing. A trashed file is
+  now a deletion from the backup, and an emptied trash no longer counts
+  toward the >50% guard. Re-running the probe left no `.Trash-1001` on the
+  destination. Copies replayed by older versions stay where they are.
 - **Empty baseline.** `read_snapshot` returned `(None, [])` for a
   zero-length or whitespace-only snapshot file and `(header, [])` for a
   header-only one: a baseline with no rows. The destination gate (AD-25),
