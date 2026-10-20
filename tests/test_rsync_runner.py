@@ -1,8 +1,14 @@
 import io
+import os
+import re
+import subprocess
+from pathlib import Path
 
 import pytest
 
-from irsync.rsync_runner import build_rsync_command, run_real_sync
+from irsync.options import Options
+from irsync.rsync_runner import build_rsync_command, exclude_matcher, run_real_sync
+from irsync.snapshot import snapshot_tree
 
 
 class TestBuildRsyncCommand:
@@ -95,6 +101,74 @@ class TestBuildRsyncCommand:
     def test_no_ssh_options_for_local(self):
         cmd = build_rsync_command(source="/src/", dest="/dst/", dry_run=False)
         assert "-e" not in cmd
+
+
+class TestExcludeMatcher:
+    """The diff must leave out exactly the paths rsync's --exclude skips."""
+
+    # Names chosen to tell rsync's per-component matching apart from the
+    # likely wrong ones: excluded dirs at the root and nested, a file named
+    # like an excluded dir, and near-misses by prefix, substring and case.
+    TREE = (
+        "keep.txt",
+        ".Trash-1000/files/a.txt",
+        "sub/.Trash-1001/files/b.txt",
+        "my.Trash-notes.txt",
+        ".TRASH-1000/c.txt",
+        ".cache/d.txt",
+        ".cache2/e.txt",
+        "sub/.cache",
+        "unfinished_downloads/f.part",
+        "docs/unfinished_downloads_old/g.txt",
+    )
+
+    @pytest.mark.parametrize(
+        "patterns",
+        [Options.without_drive_config().exclude_dirs, []],
+        ids=["default-excludes", "no-excludes"],
+    )
+    def test_agrees_with_rsync(self, tmp_path, patterns):
+        # Behavior: the paths the matcher keeps are exactly the paths rsync
+        # copies with the same excludes.
+        # Bug caught: testing only the final name would keep the contents of
+        # an excluded dir in the diff (.Trash-1000/files/a.txt); prefix or
+        # substring matching would drop .cache2 or my.Trash-notes.txt; an
+        # empty pattern list compiled to a match-everything regex would drop
+        # the whole tree.
+        # Expected values: real rsync is the oracle.
+        src, dest = tmp_path / "src", tmp_path / "dest"
+        for rel in self.TREE:
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            (src / rel).write_text(rel)
+        dest.mkdir()
+        cmd = build_rsync_command(
+            source=f"{src}/", dest=f"{dest}/", dry_run=False, exclude_dirs=patterns
+        )
+        subprocess.run(cmd, check=True, capture_output=True)  # noqa: S603
+        copied = {
+            (Path(d) / n).relative_to(dest).as_posix()
+            for d, dirs, files in os.walk(dest)
+            for n in dirs + files
+        }
+
+        excluded = exclude_matcher(patterns)
+        kept = {
+            r["path"]
+            for r in snapshot_tree(src)
+            if r["path"] != "." and not excluded(r["path"])
+        }
+
+        assert kept == copied
+
+    @pytest.mark.parametrize("pattern", ["docs/tmp", "/.cache", "cache/", "tmp**"])
+    def test_rejects_patterns_rsync_matches_against_the_whole_path(self, pattern):
+        # Behavior: a pattern with "/" or "**" is refused.
+        # Bug caught: rsync matches such a pattern against the whole path
+        # (man rsync, INCLUDE/EXCLUDE PATTERN RULES), so accepting it would
+        # let the diff silently disagree with what rsync transfers, which is
+        # how a move into an excluded dir got replayed onto the backup.
+        with pytest.raises(ValueError, match=re.escape(repr(pattern))):
+            exclude_matcher([pattern])
 
 
 class TestRunRealSyncIsolation:

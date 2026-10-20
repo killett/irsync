@@ -27,7 +27,12 @@ from irsync.preflight import (
     source_root_is_empty,
 )
 from irsync.replay import CrossDeviceMoveError, apply_moves
-from irsync.rsync_runner import build_rsync_command, run_dry_run, run_real_sync
+from irsync.rsync_runner import (
+    build_rsync_command,
+    exclude_matcher,
+    run_dry_run,
+    run_real_sync,
+)
 from irsync.snapshot import (
     LOCKFILE_NAME,
     SNAPSHOT_FILENAME,
@@ -660,7 +665,16 @@ def _run_backup_for_endpoints(
         logging.info("No prior snapshot; treating as first backup.")
 
     if have_before:
-        changes = compute_changes(before_rows, fresh_rows)
+        # Diff only what rsync transfers. A move into an excluded directory,
+        # such as a file sent to the desktop trash, is then a deletion from
+        # the backup instead of a move replayed where --delete-before never
+        # reaches it. before_rows is narrowed too, so the >50% guard below
+        # counts deletions against the same tree.
+        excluded = exclude_matcher([] if args.no_exclude else options.exclude_dirs)
+        before_rows = [r for r in before_rows if not excluded(r["path"])]
+        changes = compute_changes(
+            before_rows, [r for r in fresh_rows if not excluded(r["path"])]
+        )
         logging.info(
             "Diff: %d dir moves, %d file moves, %d modified, %d created, %d deleted.",
             len(changes.dir_moves),

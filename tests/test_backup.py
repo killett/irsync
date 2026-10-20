@@ -2138,6 +2138,140 @@ class TestDefaultExcludes:
         assert not (dest / trash_dir).exists()
 
 
+class TestDiffCoversOnlyWhatRsyncTransfers:
+    """Excluded paths are outside the backup, so they are outside the diff too."""
+
+    TRASH = Path(".Trash-1001") / "files"
+
+    @staticmethod
+    def _backup(src, dest, options, caplog, **flags):
+        """Run one backup; return its exit code and its "Diff:" log lines."""
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=options,
+                args=_args(**flags),
+            )
+        diffs = [m for m in caplog.messages if m.startswith("Diff:")]
+        return rc, diffs
+
+    @staticmethod
+    def _tree(tmp_path, *files):
+        """Create src (holding ``files`` plus four keep files) and an empty dest."""
+        src, dest = tmp_path / "src", tmp_path / "dest"
+        for rel in (*files, "keep1", "keep2", "keep3", "keep4"):
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            (src / rel).write_text(rel)
+        dest.mkdir()
+        return src, dest
+
+    @pytest.mark.parametrize(
+        ("trashed", "files", "deleted"),
+        [("docs/a.txt", ["docs/a.txt"], 1), ("proj", ["proj/x.txt", "proj/y.txt"], 3)],
+        ids=["file", "dir"],
+    )
+    def test_trashed_entry_leaves_the_backup(
+        self, tmp_path, basic_options, caplog, trashed, files, deleted
+    ):
+        # Behavior: sending a file or folder to the desktop trash removes it
+        # from the backup, and the diff reports it as deleted.
+        # Bug caught: the move into .Trash-1001 was replayed onto the
+        # destination, where the .Trash-* exclude kept --delete-before from
+        # ever removing it, so the deleted data stayed on the backup
+        # forever.
+        # Expected values: hand count. The file case deletes docs/a.txt; the
+        # dir case deletes proj and its two files. Nothing enters the backup.
+        src, dest = self._tree(tmp_path, *files)
+        assert self._backup(src, dest, basic_options, caplog)[0] == 0
+        (src / self.TRASH).mkdir(parents=True)
+        (src / trashed).rename(src / self.TRASH / Path(trashed).name)
+
+        rc, diffs = self._backup(src, dest, basic_options, caplog)
+
+        assert rc == 0
+        assert diffs == [
+            f"Diff: 0 dir moves, 0 file moves, 0 modified, 0 created, {deleted} deleted."
+        ]
+        assert not (dest / ".Trash-1001").exists()
+        # The destination's snapshot copy (AD-2) plus the untouched files.
+        assert sorted(tree_signature(dest)) == sorted(
+            [SNAPSHOT_FILENAME, "keep1", "keep2", "keep3", "keep4"]
+        )
+
+    def test_restored_entry_is_backed_up(self, tmp_path, basic_options, caplog):
+        # Behavior: restoring a file from the trash backs it up, even when
+        # the restore is the run's only change.
+        # Bug caught: a fix that just drops moves touching an excluded path
+        # would leave the restore out of the diff entirely; with nothing
+        # else changed, the run would stop at "no source changes" and never
+        # back the file up.
+        # Expected values: hand count; one file enters the backup.
+        src, dest = self._tree(tmp_path, f"{self.TRASH}/a.txt", "docs/other.txt")
+        assert self._backup(src, dest, basic_options, caplog)[0] == 0
+        (src / self.TRASH / "a.txt").rename(src / "docs" / "a.txt")
+
+        rc, diffs = self._backup(src, dest, basic_options, caplog)
+
+        assert rc == 0
+        assert diffs == [
+            "Diff: 0 dir moves, 0 file moves, 0 modified, 1 created, 0 deleted."
+        ]
+        assert (dest / "docs" / "a.txt").read_text() == f"{self.TRASH}/a.txt"
+
+    def test_emptying_the_trash_is_not_a_mass_deletion(
+        self, tmp_path, basic_options, caplog
+    ):
+        # Behavior: emptying the trash changes nothing the backup holds, so
+        # the run has nothing to do.
+        # Bug caught: the trash's 8 files counted as deletions against the
+        # 13 recorded entries (root, 2 trash dirs, 8 files, 2 real files),
+        # 62% > 50%, so the >50% guard refused a run that deletes nothing.
+        # Expected values: hand count above.
+        trash = [f"{self.TRASH}/t{i}" for i in range(8)]
+        src, dest = tmp_path / "src", tmp_path / "dest"
+        for rel in (*trash, "real1", "real2"):
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            (src / rel).write_text(rel)
+        dest.mkdir()
+        assert self._backup(src, dest, basic_options, caplog)[0] == 0
+        for rel in trash:
+            (src / rel).unlink()
+
+        rc, _diffs = self._backup(src, dest, basic_options, caplog)
+
+        assert rc == 0
+        assert (
+            "No source changes since last backup; backup drive untouched."
+            in caplog.messages
+        )
+
+    def test_no_exclude_keeps_the_trash_in_the_diff(
+        self, tmp_path, basic_options, caplog
+    ):
+        # Behavior: under --no-exclude the trash is part of the backup, so a
+        # move into it is still a move, replayed on the destination.
+        # Bug caught: a filter built from the default excludes regardless of
+        # --no-exclude would report a deletion here, and could trip the
+        # >50% guard on a run that deletes nothing.
+        # Expected values: hand count; .Trash-1001 and .Trash-1001/files are
+        # the two new dirs.
+        src, dest = self._tree(tmp_path, "docs/a.txt")
+        assert self._backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
+        (src / self.TRASH).mkdir(parents=True)
+        (src / "docs" / "a.txt").rename(src / self.TRASH / "a.txt")
+
+        rc, diffs = self._backup(src, dest, basic_options, caplog, no_exclude=True)
+
+        assert rc == 0
+        assert diffs == [
+            "Diff: 0 dir moves, 1 file moves, 0 modified, 2 created, 0 deleted."
+        ]
+        assert (dest / self.TRASH / "a.txt").read_text() == "docs/a.txt"
+        assert not (dest / "docs" / "a.txt").exists()
+
+
 class TestCorruptSnapshotRefusesOnlyThatDrive:
     """A corrupt baseline refuses its own run; it must not take down an ALL batch."""
 

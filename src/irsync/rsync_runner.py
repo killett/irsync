@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import fnmatch
 import logging
 import os
+import re
 import shlex
 import signal
 import subprocess  # noqa: S404 — invoking rsync is the whole point of this module
 import sys
 import threading
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from irsync.snapshot import (
@@ -41,8 +44,9 @@ def build_rsync_command(
         source: Source endpoint (local path with trailing slash, or ``host:/path/``).
         dest: Destination endpoint.
         dry_run: If True, append ``--dry-run``.
-        exclude_dirs: Names or rsync patterns to pass with ``--exclude``; each
-            matches at any depth.
+        exclude_dirs: Names or wildcard names (no ``/``) to pass with
+            ``--exclude``; each matches at any depth. :func:`exclude_matcher`
+            applies the same list to the diff.
         no_exclude: If True, ignore ``exclude_dirs`` and transfer everything under the source root (other than the reserved-namespace files).
         ssh_port: Optional SSH port for remote endpoints.
         ssh_key: Optional SSH key path for remote endpoints.
@@ -93,6 +97,66 @@ def build_rsync_command(
 
     cmd.extend([source, dest])
     return cmd
+
+
+def exclude_matcher(exclude_dirs: Sequence[str]) -> Callable[[str], bool]:
+    """Return a predicate telling whether rsync's ``--exclude`` skips a path.
+
+    The orchestrator diffs only the snapshot rows this predicate keeps, so
+    the diff covers exactly the tree rsync transfers. Otherwise a file moved
+    into an excluded directory (sent to the desktop trash) is replayed there
+    on the destination as a move, and ``--delete-before`` never removes it.
+
+    Each pattern is matched the way rsync matches a pattern with no ``/``:
+    against every component of the path, because rsync never descends into
+    an excluded directory. Answers are cached per directory, since every
+    entry in a directory shares its answer.
+
+    Args:
+        exclude_dirs: The patterns :func:`build_rsync_command` passes with
+            ``--exclude``; empty when nothing is excluded.
+
+    Returns:
+        A function taking a snapshot row's relative POSIX path and returning
+        True when rsync skips it.
+
+    Raises:
+        ValueError: If a pattern contains ``/`` or ``**``. rsync matches such
+            a pattern against the whole path, which this predicate does not
+            model.
+    """
+    for pattern in exclude_dirs:
+        if "/" in pattern or "**" in pattern:
+            raise ValueError(
+                f"Exclude pattern {pattern!r} contains '/' or '**'. rsync "
+                "matches such a pattern against the whole path, but irsync's "
+                "diff only models patterns matched against single names."
+            )
+    if not exclude_dirs:
+        # An empty alternation would compile to a regex matching every name.
+        return lambda path: False
+    name_rx = re.compile("|".join(fnmatch.translate(p) for p in exclude_dirs))
+    dir_excluded: dict[str, bool] = {"": False}
+
+    def in_excluded_dir(d: str) -> bool:
+        # Walk up to the nearest cached ancestor, then cache each directory
+        # on the way back down. Iterative, for trees deeper than the
+        # recursion limit (10th-F5).
+        pending: list[str] = []
+        while d not in dir_excluded:
+            pending.append(d)
+            d = d.rpartition("/")[0]
+        hit = dir_excluded[d]
+        for p in reversed(pending):
+            hit = hit or name_rx.match(p.rpartition("/")[2]) is not None
+            dir_excluded[p] = hit
+        return hit
+
+    def excluded(path: str) -> bool:
+        parent, _, name = path.rpartition("/")
+        return name_rx.match(name) is not None or in_excluded_dir(parent)
+
+    return excluded
 
 
 def run_dry_run(cmd: list[str]) -> str:

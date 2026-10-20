@@ -26,9 +26,9 @@ class Options:
     Attributes:
         base_dir: Parent directory of every drive; the mount-gate root.
         drive_config: The loaded layout, or None for a plain-path run.
-        exclude_dirs: Names or rsync patterns skipped by default, at any
-            depth. ".Trash-*" covers every user's desktop trash
-            (freedesktop's ".Trash-$uid").
+        exclude_dirs: Names or wildcard names (no "/") skipped by default,
+            at any depth, by rsync and by the diff (AD-32). ".Trash-*" covers
+            every user's desktop trash (freedesktop's ".Trash-$uid").
         max_errors: How many failures an ``ALL`` run tolerates before stopping.
     """
 
