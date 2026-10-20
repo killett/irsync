@@ -295,13 +295,14 @@ def read_snapshot(
             ``source_root`` must match this when present.
 
     Returns:
-        ``(header_or_none, rows)``.
+        ``(header_or_none, rows)``; ``rows`` is never empty.
 
     Raises:
         SnapshotMismatch: If the header's source root doesn't match.
-        SnapshotCorrupt: If a line is not valid JSON or not a JSON object,
-            the header's ``_meta`` is not an object, or a row lacks a
-            required key or has an unknown type tag.
+        SnapshotCorrupt: If the file has no rows (empty, blank, or a header
+            alone), a line is not valid JSON or not a JSON object, the
+            header's ``_meta`` is not an object, or a row lacks a required
+            key or has an unknown type tag.
     """
     # 10th-F4: stream line by line instead of read_text + split("\n"). The
     # old approach materialized the whole file as one str plus a list of
@@ -321,7 +322,10 @@ def read_snapshot(
                 first_lineno = ln
                 break
         if not first_line:
-            return None, []
+            raise SnapshotCorrupt(
+                f"Snapshot {file} has no entries (the file is empty or blank); "
+                "every snapshot irsync writes records at least the source root"
+            )
 
         try:
             first = json.loads(first_line)
@@ -361,6 +365,14 @@ def read_snapshot(
             except json.JSONDecodeError as e:
                 raise SnapshotCorrupt(f"Malformed JSONL at {file}:{ln}: {e}") from e
             rows.append(_validate_row(obj, file, ln))
+    if not rows:
+        # Only reachable with a header: a headerless first line is a row.
+        # An empty baseline would skip every first-run and mass-delete guard
+        # in run_backup, so it is refused like any other corrupt snapshot.
+        raise SnapshotCorrupt(
+            f"Snapshot {file} has no entries after its header; every snapshot "
+            "irsync writes records at least the source root"
+        )
     return header, rows
 
 

@@ -155,12 +155,15 @@ the destination, and irsync would exit 0 and call it a successful backup.
 - **The snapshot is corrupt.** A snapshot file with a line that cannot be
   used — cut off mid-write or garbled, not a JSON object, a row missing a
   field, or an unknown entry type — is never partially trusted: the run
-  refuses with exit code 2 and names the bad line, and an `ALL` run counts
-  it as one drive's error and carries on with the rest (an `ALL` run stops
-  once five drives have failed). The file is left in place. To recover,
-  move it out of the source tree; the next run is then a first backup,
-  which needs `--allow-nonempty-dest` if the destination already holds a
-  backup.
+  refuses with exit code 2 and names the bad line. A snapshot with no
+  entries at all (empty, blank, or only its header line) is refused the same
+  way: irsync never writes one, and read as an empty baseline it would slip
+  past both first-backup checks and the more-than-half check above. An
+  `ALL` run counts such a drive as one error and carries on with the rest
+  (an `ALL` run stops once five drives have failed). The file is left in
+  place. To recover, move it out of the source tree; the next run is then a
+  first backup, which needs `--allow-nonempty-dest` if the destination
+  already holds a backup.
 - **`--dry-run` changes nothing.** Honored on both the normal (snapshot)
   path and `--no-snapshot`: irsync shows what rsync would do and exits 0
   without touching the destination or persisting a snapshot, on either

@@ -2189,6 +2189,54 @@ class TestCorruptSnapshotRefusesOnlyThatDrive:
         assert list(dest.iterdir()) == []
         assert snap.read_bytes() == corrupt_bytes
 
+    @pytest.mark.parametrize("shape", ["zero-length", "blank", "header-only"])
+    def test_snapshot_with_no_entries_refuses_and_keeps_destination(
+        self, tmp_path, basic_options, monkeypatch, caplog, shape
+    ):
+        # Behavior: a snapshot with no entries refuses the run (exit 2) and
+        # leaves an existing backup alone, even under --yes with a source
+        # that has nothing to do with that backup.
+        # Bug caught: the file read as an empty baseline, which skipped the
+        # destination gate (AD-25), the empty-source guard (AD-28) and the
+        # >50% guard (AD-6); a probe of this exact setup had rsync delete
+        # all five destination files.
+        # Expected values: the five files are fixture data written here.
+        src, dest = tmp_path / "wrongsrc", tmp_path / "dest"
+        src.mkdir()
+        dest.mkdir()
+        (src / "unrelated.txt").write_text("x")
+        for i in range(5):
+            (dest / f"precious{i}.txt").write_text("keep")
+        dest_before = tree_signature(dest)
+        header = json.dumps(
+            {
+                "_meta": {
+                    "source_root": str(src.resolve()),
+                    "irsync_version": "x",
+                    "created_at_utc": "x",
+                }
+            }
+        )
+        content = {"zero-length": "", "blank": "\n  \n", "header-only": header + "\n"}
+        snap = src / SNAPSHOT_FILENAME
+        snap.write_text(content[shape], encoding="utf-8")
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        with caplog.at_level(logging.ERROR):
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert rc == EXIT_REFUSED
+        assert f"{snap.resolve()} has no entries" in caplog.text
+        assert tree_signature(dest) == dest_before
+        assert snap.read_text(encoding="utf-8") == content[shape]
+
     def test_all_run_counts_it_as_an_error_and_continues(
         self, make_options, monkeypatch, caplog
     ):

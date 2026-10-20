@@ -69,7 +69,7 @@ secretly waking the backup drive on every run.
 |---|---|
 | `conftest.py` | Shared fixtures and helpers: `make_tree` (random trees with unique file sizes), `make_options` (factory building `Options` from a tmp_path-rooted drive config), `basic_options` (that factory's defaults), `write_drive_config` (writes a `drives.toml` of invented drive ids under a root), `cli_args` (the argparse `Namespace` the orchestrator expects, with overrides), `subprocess_pythonpath` (the `PYTHONPATH` a `python -m irsync` subprocess needs), `tree_signature`, `inode_for`; the invented ids `DRIVE_IDS`, `SOURCE_DRIVE`, `BACKUP_DRIVE` |
 | `test_paths.py` | path-helper coverage |
-| `test_snapshot.py` | snapshot round-trip (incl. `SnapshotCorrupt` for malformed or non-object lines, missing keys and invalid types, non-UTF-8 round-trip, streaming read, depth-1500 walk) |
+| `test_snapshot.py` | snapshot round-trip (incl. `SnapshotCorrupt` for malformed or non-object lines, missing keys and invalid types, a file with no rows, non-UTF-8 round-trip, streaming read, depth-1500 walk) |
 | `test_diff.py` | diff/move detection (incl. symlink add/delete/replace, NFS-sim via real `snapshot_tree` + forged row, real rename, type-"o" add/delete, type-change at same path, real-syscall kernel inode reuse — skips where btime collapses to mtime) |
 | `test_replay.py` | `apply_moves` behavior |
 | `test_rsync_runner.py` | rsync invocation + subprocess isolation (incl. `start_new_session`, KeyboardInterrupt-during-stream, killpg-on-cancel, SIGTERM handler installed/restored/raises) |
@@ -145,7 +145,11 @@ batch). The corrupt file is left in place for inspection. Validation lives in
 a `_validate_row(obj, file, lineno)` helper applied to every row on both the
 headered and the legacy headerless branch; the reader streams line by line and
 reports **actual file line numbers** so `sed -n <N>p <file>` lands on the bad
-row.
+row. A file with no rows at all (zero-length, blank, or a header alone) also
+raises `SnapshotCorrupt`: every snapshot irsync writes has at least the root
+row (`path == "."`), and an empty baseline would otherwise skip the
+destination gate (AD-25), the empty-source guard (AD-28) and the >50% guard
+(AD-6): a 2026-10-18 probe showed rsync then deleting the destination.
 
 ### 5. Reserved-namespace pattern at the source root
 
@@ -354,9 +358,9 @@ page cache when replace runs. A power loss between rename and the kernel's
 delayed writeback leaves a directory entry pointing at empty/partial content;
 a file cut off mid-line then makes every snapshot-path run refuse
 (`SnapshotCorrupt`) until the user moves the snapshot out of the source tree,
-costing one run's rename optimization; a file cut at a line boundary, by
-contrast, currently reads as a shorter baseline, and a zero-length or
-header-only file as an empty one, rather than as corrupt. The fix opens
+costing one run's rename optimization; a zero-length or header-only file
+is refused the same way (AD-4). A file cut at a line boundary, by contrast,
+still reads as a shorter baseline rather than as corrupt. The fix opens
 the tempfile read-only and `os.fsync`s its fd between `write_snapshot` and
 `os.replace`. Parent-directory fsync is deliberately skipped — the user's
 filesystems (ext4/btrfs/xfs) handle the dirent flush implicitly under the

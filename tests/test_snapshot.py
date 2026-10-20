@@ -203,6 +203,39 @@ class TestWriteReadRoundtrip:
         with pytest.raises(SnapshotCorrupt, match=":1:"):
             read_snapshot(out, expected_source_root=tmp_path)
 
+    @pytest.mark.parametrize("shape", ["zero-length", "blank", "header-only"])
+    def test_snapshot_with_no_entries_is_corrupt(self, tmp_path, shape):
+        # Behavior: a snapshot with no rows is corrupt, not an empty baseline.
+        # Bug caught: these shapes read as a baseline with no rows, so
+        # run_backup skipped the destination, empty-source and >50% guards
+        # and rsync deleted the destination (reproduced 2026-10-18).
+        # Expected: write_snapshot always writes the root row (path "."),
+        # so no snapshot irsync writes has zero rows.
+        header_line = (
+            '{"_meta":{"source_root":"' + str(tmp_path.resolve()) + '",'
+            '"irsync_version":"x","created_at_utc":"x"}}\n'
+        )
+        content = {"zero-length": "", "blank": "\n  \n", "header-only": header_line}
+        out = tmp_path / "empty.jsonl"
+        out.write_text(content[shape], encoding="utf-8")
+        with pytest.raises(SnapshotCorrupt, match=r"empty\.jsonl has no entries"):
+            read_snapshot(out, expected_source_root=tmp_path)
+
+    def test_smallest_real_snapshot_still_reads(self, tmp_path):
+        # Behavior: the smallest snapshot irsync writes (an empty source:
+        # header plus the root row) is still a valid baseline.
+        # Bug caught: an over-strict no-entries check, such as one that does
+        # not count the root row, would refuse every run after an empty
+        # source was backed up with --allow-empty-source.
+        # Expected: snapshot_tree records the root as path "." and an empty
+        # directory has nothing else to record.
+        src = tmp_path / "empty_src"
+        src.mkdir()
+        out = tmp_path / "snap.jsonl"
+        write_snapshot(snapshot_tree(src), source_root=src, out_file=out)
+        _header, rows = read_snapshot(out, expected_source_root=src)
+        assert [r["path"] for r in rows] == ["."]
+
     def test_7th_m2_read_snapshot_rejects_invalid_type_value(self, tmp_path):
         # 7th-M2: a corrupted snapshot row with an unknown type ("x", "")
         # was silently appended; later compute_changes filtered it out via
