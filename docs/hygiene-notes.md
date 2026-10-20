@@ -802,15 +802,18 @@ They are the first four Open questions in `PROGRESS.md`.
   `.Trash-*` default (the owner's decision) extends it to every uid. Root
   fix for a later pass: drop planned moves whose target falls under an
   excluded name, or apply the exclude list in the snapshot walk.
-- **Empty baseline.** `read_snapshot` returns `(None, [])` for a
+- **Empty baseline.** `read_snapshot` returned `(None, [])` for a
   zero-length or whitespace-only snapshot file and `(header, [])` for a
   header-only one: a baseline with no rows. The destination gate (AD-25),
-  the empty-source guard (AD-28) and the >50% guard (AD-6) are then all
+  the empty-source guard (AD-28) and the >50% guard (AD-6) were then all
   skipped. The probe backed up an unrelated non-empty source over a
   destination holding five files under `--yes`, with each of the three
   shapes, and rsync deleted all five. A legitimate snapshot always has a
   header and a root row, so these shapes are always damage; the natural
-  fix is to raise `SnapshotCorrupt`. It is the recommended next fix.
+  fix is to raise `SnapshotCorrupt`. **Fixed on 2026-10-19** in `d1bf4c6`:
+  `read_snapshot` now raises `SnapshotCorrupt` for all three shapes, so the
+  run refuses that drive (exit 2) and leaves the file in place. Re-running
+  the probe refused each shape and left all five destination files.
 - **Other ways one bad drive can kill an `ALL` run.** A row whose values
   have the wrong types (`"path": 5`, `"dev": [1]`) raises `TypeError`, and a
   `.irsync_snapshot.jsonl` that is a directory raises `IsADirectoryError`.
