@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -250,6 +251,69 @@ class TestWriteReadRoundtrip:
         bad_row = '{"dev":1,"ino":2,"type":"q","nlink":1,"size":0,"path":"a","mtime_ns":0,"btime_ns":-1}\n'
         out.write_text(header_line + bad_row, encoding="utf-8")
         with pytest.raises(SnapshotCorrupt, match="Invalid type 'q'"):
+            read_snapshot(out, expected_source_root=tmp_path)
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("path", 5),
+            ("dev", [1]),
+            ("ino", "a"),
+            ("size", None),
+            ("nlink", True),
+            ("mtime_ns", 1.5),
+            ("btime_ns", "x"),
+        ],
+    )
+    def test_wrongly_typed_value_is_corrupt(self, tmp_path, key, value):
+        # Behavior: a row value of a type irsync never writes is a corrupt
+        # snapshot, reported with its key, value and file:line.
+        # Bug caught: "path": 5 and "dev": [1] raised AttributeError and
+        # TypeError inside run_backup, escaping an ALL batch; "ino": "a" and
+        # "size": null were diffed without complaint (reproduced 2026-10-19).
+        # nlink True catches a bare isinstance(int) check (bool is an int),
+        # mtime_ns 1.5 one that accepts any number, and btime_ns one that
+        # skips the keys an older snapshot may omit.
+        # Expected: write_snapshot writes os.stat integers and a str path
+        # (the Row TypedDict); one wrong value per key, picked by hand.
+        out = tmp_path / "bad_value.jsonl"
+        header_line = (
+            '{"_meta":{"source_root":"' + str(tmp_path.resolve()) + '",'
+            '"irsync_version":"x","created_at_utc":"x"}}\n'
+        )
+        row = {
+            "dev": 1,
+            "ino": 2,
+            "type": "f",
+            "nlink": 1,
+            "size": 0,
+            "path": "a",
+            "mtime_ns": 0,
+            "btime_ns": -1,
+        }
+        row[key] = value
+        out.write_text(header_line + json.dumps(row) + "\n", encoding="utf-8")
+        with pytest.raises(
+            SnapshotCorrupt,
+            match=rf"Invalid {key} {re.escape(repr(value))} in \S*bad_value\.jsonl:2 ",
+        ):
+            read_snapshot(out, expected_source_root=tmp_path)
+
+    @pytest.mark.parametrize("kind", ["directory", "fifo"])
+    def test_snapshot_that_is_not_a_regular_file_is_corrupt(self, tmp_path, kind):
+        # Behavior: a snapshot path holding anything but a regular file is a
+        # corrupt snapshot.
+        # Bug caught: a directory raised IsADirectoryError, which escapes an
+        # ALL batch (reproduced 2026-10-19); a FIFO blocked open() forever,
+        # hanging the run, and a directory-only check would let it through.
+        # Expected: write_snapshot only ever leaves a regular file there
+        # (mkstemp, then os.replace).
+        out = tmp_path / "snap.jsonl"
+        if kind == "directory":
+            out.mkdir()
+        else:
+            os.mkfifo(out)
+        with pytest.raises(SnapshotCorrupt, match=r"snap\.jsonl is not a regular file"):
             read_snapshot(out, expected_source_root=tmp_path)
 
 

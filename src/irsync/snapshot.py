@@ -63,6 +63,10 @@ class Row(TypedDict):
     path: str  # POSIX relative path from snapshot root
 
 
+_INT_KEYS: tuple[str, ...] = ("dev", "ino", "nlink", "size", "mtime_ns", "btime_ns")
+"""The :class:`Row` keys that hold an ``int``; row validation checks each one."""
+
+
 def is_reserved_root_name(name: str) -> bool:
     """Return True if ``name`` is one of irsync's own files at a tree root.
 
@@ -299,10 +303,12 @@ def read_snapshot(
 
     Raises:
         SnapshotMismatch: If the header's source root doesn't match.
-        SnapshotCorrupt: If the file has no rows (empty, blank, or a header
-            alone), a line is not valid JSON or not a JSON object, the
-            header's ``_meta`` is not an object, or a row lacks a required
-            key or has an unknown type tag.
+        SnapshotCorrupt: If ``file`` is not a regular file, the file has no
+            rows (empty, blank, or a header alone), a line is not valid JSON
+            or not a JSON object, the header's ``_meta`` is not an object, or
+            a row fails validation (a missing key, an unknown type tag, or a
+            wrongly typed value).
+        FileNotFoundError: If ``file`` does not exist.
     """
     # 10th-F4: stream line by line instead of read_text + split("\n"). The
     # old approach materialized the whole file as one str plus a list of
@@ -311,6 +317,11 @@ def read_snapshot(
     # indexes. errors="surrogateescape" mirrors the writer so non-UTF-8
     # bytes in paths round-trip back to the same surrogate codepoints
     # (10th-F1).
+    # write_snapshot only ever leaves a regular file here. A directory made
+    # open() raise IsADirectoryError, which no caller catches, and a FIFO
+    # made it block forever. stat() follows a symlink, as open() does.
+    if not stat.S_ISREG(file.stat().st_mode):
+        raise SnapshotCorrupt(f"Snapshot {file} is not a regular file")
     header: Header | None = None
     rows: list[Row] = []
     with file.open("r", encoding="utf-8", errors="surrogateescape") as f:
@@ -381,7 +392,8 @@ def _validate_row(obj: object, file: Path, lineno: int) -> Row:
 
     Applied to every row :func:`read_snapshot` parses, headered or legacy
     headerless. Refuses a row with a precise location on a non-object value,
-    missing keys or an invalid type tag (7th-M2).
+    missing keys, an invalid type tag (7th-M2), or a value of a type
+    :func:`write_snapshot` never writes.
 
     Args:
         obj: Whatever :func:`json.loads` returned for the line; only a JSON
@@ -395,7 +407,8 @@ def _validate_row(obj: object, file: Path, lineno: int) -> Row:
 
     Raises:
         SnapshotCorrupt: If ``obj`` is not a JSON object, lacks a required
-            key, or has an unknown type tag.
+            key, has an unknown type tag, holds a non-``int`` (or a ``bool``)
+            under an integer key, or has a non-``str`` path.
     """
     if not isinstance(obj, dict):
         raise SnapshotCorrupt(
@@ -419,4 +432,17 @@ def _validate_row(obj: object, file: Path, lineno: int) -> Row:
     # just disables the btime tiebreaker.
     obj.setdefault("mtime_ns", -1)
     obj.setdefault("btime_ns", -1)
+    # Checked after the defaults, so a legacy row's absent keys pass. A
+    # wrongly typed value either crashed the diff with a TypeError or
+    # AttributeError that escaped an ALL batch, or was diffed as if valid.
+    for k in _INT_KEYS:
+        # type(), not isinstance(): JSON true/false load as bool, an int.
+        if type(obj[k]) is not int:
+            raise SnapshotCorrupt(
+                f"Invalid {k} {obj[k]!r} in {file}:{lineno} (expected an integer)"
+            )
+    if not isinstance(obj["path"], str):
+        raise SnapshotCorrupt(
+            f"Invalid path {obj['path']!r} in {file}:{lineno} (expected a string)"
+        )
     return obj  # type: ignore[return-value]

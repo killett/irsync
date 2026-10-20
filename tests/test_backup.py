@@ -18,7 +18,12 @@ from irsync.backup import (
     run_backup,
 )
 from irsync.diff import Changes
-from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME, snapshot_tree
+from irsync.snapshot import (
+    LOCKFILE_NAME,
+    SNAPSHOT_FILENAME,
+    snapshot_tree,
+    write_snapshot,
+)
 
 from .conftest import cli_args as _args
 from .conftest import inode_for, tree_signature
@@ -2396,6 +2401,54 @@ class TestCorruptSnapshotRefusesOnlyThatDrive:
         assert rc == 1
         assert (base / "C_backup" / "c.txt").read_text() == "c"
         assert list((base / "B_backup").iterdir()) == []
+        summary = next(
+            r.getMessage()
+            for r in caplog.records
+            if "missing/skipped" in r.getMessage()
+        )
+        assert "backed up=1 (C)" in summary
+        assert "errors=1" in summary
+
+    @pytest.mark.parametrize("shape", ["wrongly typed value", "directory"])
+    def test_all_run_survives_a_snapshot_that_used_to_crash(
+        self, make_options, monkeypatch, caplog, shape
+    ):
+        # Behavior: a drive whose snapshot has a wrongly typed value, or is
+        # a directory, is refused before rsync and counted as one error in
+        # an ALL run; later drives are still backed up.
+        # Bug caught: TypeError and IsADirectoryError escaped
+        # run_all_backups, so C was never backed up and no summary was
+        # logged (reproduced 2026-10-19). Requiring B's own refusal in the
+        # log means a catch-all in run_all_backups alone does not pass.
+        # Expected values: B is the only broken drive; C holds one file.
+        options = make_options(backup_order=["B", "C"])
+        base = options.base_dir
+        b_src, c_src = base / "B", base / "C"
+        for d in (b_src, base / "B_backup", c_src, base / "C_backup"):
+            d.mkdir()
+        (b_src / "b.txt").write_text("b")
+        (c_src / "c.txt").write_text("c")
+        snap = b_src / SNAPSHOT_FILENAME
+        if shape == "directory":
+            snap.mkdir()
+            refusal = f"Snapshot {snap.resolve()} is not a regular file"
+        else:
+            write_snapshot(snapshot_tree(b_src), source_root=b_src, out_file=snap)
+            lines = snap.read_text(encoding="utf-8").splitlines()
+            row = json.loads(lines[1])
+            row["dev"] = [1]
+            lines[1] = json.dumps(row)
+            snap.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            refusal = f"Invalid dev [1] in {snap.resolve()}:2 "
+        monkeypatch.setattr("os.path.ismount", lambda p: True)
+
+        with caplog.at_level(logging.INFO):
+            rc = run_all_backups(options=options, args=_args())
+
+        assert rc == 1
+        assert (base / "C_backup" / "c.txt").read_text() == "c"
+        assert list((base / "B_backup").iterdir()) == []
+        assert refusal in caplog.text
         summary = next(
             r.getMessage()
             for r in caplog.records
