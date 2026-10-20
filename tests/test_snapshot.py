@@ -299,6 +299,62 @@ class TestWriteReadRoundtrip:
         ):
             read_snapshot(out, expected_source_root=tmp_path)
 
+    @pytest.mark.parametrize("path", ["../x", "a/../../x", "/abs/x", "", "a\x00b"])
+    def test_path_irsync_could_not_have_written_is_corrupt(self, tmp_path, path):
+        # Behavior: a row path other than "." or a normalized path below the
+        # root is a corrupt snapshot.
+        # Bug caught: replay joins the old path onto the destination, so
+        # "../x" and "/abs/x" moved a file from outside the backup into it
+        # (reproduced 2026-10-19: the file vanished from where it was).
+        # "a/../../x" catches a check of the first component only, "" names
+        # the destination root itself, and NUL makes os.rename raise
+        # ValueError, which escapes an ALL batch.
+        # Expected: snapshot_tree writes "." for the root and real names
+        # joined by "/" below it; a real name is never "", "." or "..", and
+        # never contains "/" or NUL.
+        out = tmp_path / "bad_path.jsonl"
+        header_line = (
+            '{"_meta":{"source_root":"' + str(tmp_path.resolve()) + '",'
+            '"irsync_version":"x","created_at_utc":"x"}}\n'
+        )
+        row = {
+            "dev": 1,
+            "ino": 2,
+            "type": "f",
+            "nlink": 1,
+            "size": 0,
+            "path": path,
+            "mtime_ns": 0,
+            "btime_ns": -1,
+        }
+        out.write_text(header_line + json.dumps(row) + "\n", encoding="utf-8")
+        with pytest.raises(
+            SnapshotCorrupt,
+            match=rf"Invalid path {re.escape(repr(path))} in \S*bad_path\.jsonl:2 ",
+        ):
+            read_snapshot(out, expected_source_root=tmp_path)
+
+    def test_dotted_names_are_valid_paths(self, tmp_path):
+        # Behavior: real names made of dots read back as written.
+        # Bug caught: a substring test such as '".." in path' would refuse
+        # every backup of a drive holding a file named "..hidden" or "a...b".
+        # Expected: the names this test creates, plus the root row ".".
+        src = tmp_path / "src"
+        (src / "dir").mkdir(parents=True)
+        for name in ("..hidden", "a...b", "dir/.x", "dir/..."):
+            (src / name).write_text("x")
+        out = tmp_path / "snap.jsonl"
+        write_snapshot(snapshot_tree(src), source_root=src, out_file=out)
+        _header, rows = read_snapshot(out, expected_source_root=src)
+        assert sorted(r["path"] for r in rows) == [
+            ".",
+            "..hidden",
+            "a...b",
+            "dir",
+            "dir/...",
+            "dir/.x",
+        ]
+
     @pytest.mark.parametrize("kind", ["directory", "fifo"])
     def test_snapshot_that_is_not_a_regular_file_is_corrupt(self, tmp_path, kind):
         # Behavior: a snapshot path holding anything but a regular file is a

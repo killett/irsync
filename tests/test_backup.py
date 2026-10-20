@@ -2409,6 +2409,49 @@ class TestCorruptSnapshotRefusesOnlyThatDrive:
         assert "backed up=1 (C)" in summary
         assert "errors=1" in summary
 
+    @pytest.mark.parametrize("style", ["relative", "absolute"])
+    def test_path_outside_the_tree_refuses_and_leaves_outside_files_alone(
+        self, tmp_path, basic_options, monkeypatch, caplog, style
+    ):
+        # Behavior: a snapshot row whose path leaves the source tree refuses
+        # the run (exit 2); the file it names and the destination are left
+        # alone.
+        # Bug caught: replay renamed dest/<old path> to dest/<new path>, so a
+        # row naming ../outside/victim.txt (or its absolute path) with the
+        # inode of a real source file moved victim.txt into the backup, with
+        # exit 0 (reproduced 2026-10-19).
+        # Expected values: the fixture files written here.
+        src, dest = tmp_path / "src", tmp_path / "dest"
+        outside = tmp_path / "outside"
+        for d in (src, dest, outside):
+            d.mkdir()
+        (src / "moved.txt").write_text("source content")
+        victim = outside / "victim.txt"
+        victim.write_text("not part of any backup")
+        bad = "../outside/victim.txt" if style == "relative" else str(victim)
+        rows = snapshot_tree(src)
+        for r in rows:
+            if r["path"] == "moved.txt":
+                r["path"] = bad
+        snap = src / SNAPSHOT_FILENAME
+        write_snapshot(rows, source_root=src, out_file=snap)
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        with caplog.at_level(logging.ERROR):
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert rc == EXIT_REFUSED
+        assert f"Invalid path {bad!r} in {snap.resolve()}:" in caplog.text
+        assert victim.read_text() == "not part of any backup"
+        assert list(dest.iterdir()) == []
+
     @pytest.mark.parametrize("shape", ["wrongly typed value", "directory"])
     def test_all_run_survives_a_snapshot_that_used_to_crash(
         self, make_options, monkeypatch, caplog, shape

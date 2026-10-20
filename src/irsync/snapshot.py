@@ -66,6 +66,9 @@ class Row(TypedDict):
 _INT_KEYS: tuple[str, ...] = ("dev", "ino", "nlink", "size", "mtime_ns", "btime_ns")
 """The :class:`Row` keys that hold an ``int``; row validation checks each one."""
 
+_NON_NAMES: frozenset[str] = frozenset(("", ".", ".."))
+"""Path components no real directory entry has; a row path containing one is refused."""
+
 
 def is_reserved_root_name(name: str) -> bool:
     """Return True if ``name`` is one of irsync's own files at a tree root.
@@ -306,8 +309,8 @@ def read_snapshot(
         SnapshotCorrupt: If ``file`` is not a regular file, the file has no
             rows (empty, blank, or a header alone), a line is not valid JSON
             or not a JSON object, the header's ``_meta`` is not an object, or
-            a row fails validation (a missing key, an unknown type tag, or a
-            wrongly typed value).
+            a row fails validation (a missing key, an unknown type tag, a
+            wrongly typed value, or a malformed path).
         FileNotFoundError: If ``file`` does not exist.
     """
     # 10th-F4: stream line by line instead of read_text + split("\n"). The
@@ -392,8 +395,9 @@ def _validate_row(obj: object, file: Path, lineno: int) -> Row:
 
     Applied to every row :func:`read_snapshot` parses, headered or legacy
     headerless. Refuses a row with a precise location on a non-object value,
-    missing keys, an invalid type tag (7th-M2), or a value of a type
-    :func:`write_snapshot` never writes.
+    missing keys, an invalid type tag (7th-M2), a value of a type
+    :func:`write_snapshot` never writes, or a path that is not ``"."`` or a
+    normalized path below the root.
 
     Args:
         obj: Whatever :func:`json.loads` returned for the line; only a JSON
@@ -408,7 +412,9 @@ def _validate_row(obj: object, file: Path, lineno: int) -> Row:
     Raises:
         SnapshotCorrupt: If ``obj`` is not a JSON object, lacks a required
             key, has an unknown type tag, holds a non-``int`` (or a ``bool``)
-            under an integer key, or has a non-``str`` path.
+            under an integer key, or has a path that is not a ``str``, or
+            that is absolute, has an empty, ``.`` or ``..`` component, or
+            contains NUL (anything but ``"."`` for the root).
     """
     if not isinstance(obj, dict):
         raise SnapshotCorrupt(
@@ -441,8 +447,18 @@ def _validate_row(obj: object, file: Path, lineno: int) -> Row:
             raise SnapshotCorrupt(
                 f"Invalid {k} {obj[k]!r} in {file}:{lineno} (expected an integer)"
             )
-    if not isinstance(obj["path"], str):
+    path = obj["path"]
+    if not isinstance(path, str):
         raise SnapshotCorrupt(
-            f"Invalid path {obj['path']!r} in {file}:{lineno} (expected a string)"
+            f"Invalid path {path!r} in {file}:{lineno} (expected a string)"
+        )
+    # Replay joins this path onto the destination, so one that leaves the
+    # tree ("../x", "/x") moved a file from outside the backup into it.
+    # snapshot_tree writes "." for the root and real names joined by "/"
+    # below it, and a real name is never "", "." or "..", nor holds NUL.
+    if path != "." and ("\x00" in path or not _NON_NAMES.isdisjoint(path.split("/"))):
+        raise SnapshotCorrupt(
+            f"Invalid path {path!r} in {file}:{lineno} "
+            "(expected a normalized path relative to the source root)"
         )
     return obj  # type: ignore[return-value]
