@@ -2452,6 +2452,69 @@ class TestCorruptSnapshotRefusesOnlyThatDrive:
         assert victim.read_text() == "not part of any backup"
         assert list(dest.iterdir()) == []
 
+    def test_unexpected_error_in_one_drive_is_counted_and_the_batch_continues(
+        self, make_options, monkeypatch, caplog
+    ):
+        # Behavior: an exception no handler names, raised while backing up
+        # one drive of an ALL run, is logged with its traceback and counted
+        # as one error; later drives are still backed up.
+        # Bug caught: run_all_backups caught only named exception types, so
+        # anything else escaped and C was never backed up. Here B's
+        # destination copy of the snapshot is a directory, so persisting it
+        # raises IsADirectoryError after rsync (reproduced 2026-10-19).
+        # Expected values: B is the only broken drive; C holds one file.
+        options = make_options(backup_order=["B", "C"])
+        base = options.base_dir
+        b_src, c_src = base / "B", base / "C"
+        for d in (b_src, base / "B_backup", c_src, base / "C_backup"):
+            d.mkdir()
+        (b_src / "b.txt").write_text("b")
+        (c_src / "c.txt").write_text("c")
+        (base / "B_backup" / SNAPSHOT_FILENAME).mkdir()
+        monkeypatch.setattr("os.path.ismount", lambda p: True)
+
+        with caplog.at_level(logging.INFO):
+            rc = run_all_backups(options=options, args=_args())
+
+        assert rc == 1
+        assert (base / "C_backup" / "c.txt").read_text() == "c"
+        record = next(
+            r
+            for r in caplog.records
+            if r.getMessage().startswith("Unexpected error backing up 'B'")
+        )
+        assert record.levelno == logging.ERROR
+        assert record.exc_info is not None
+        assert record.exc_info[0] is IsADirectoryError
+        summary = next(
+            r.getMessage()
+            for r in caplog.records
+            if "missing/skipped" in r.getMessage()
+        )
+        assert "backed up=1 (C)" in summary
+        assert "errors=1" in summary
+
+    def test_missing_rsync_still_stops_an_all_run_at_once(
+        self, make_options, monkeypatch, caplog
+    ):
+        # Behavior: rsync missing is the run's problem, not one drive's, so
+        # RsyncUnavailable still leaves run_all_backups on the first drive
+        # for cli.main to report once (exit 2).
+        # Bug caught: a catch-all for unexpected per-drive errors that also
+        # swallowed this would log a traceback for every drive and exit 1.
+        # Expected: the behavior before the catch-all; run_backup raises
+        # RsyncUnavailable to cli.main by design (see
+        # test_missing_rsync_binary_raises_before_touching_anything).
+        from irsync.preflight import RsyncUnavailable
+
+        options = make_options(backup_order=["B", "C"])
+        monkeypatch.setattr("shutil.which", lambda name: None)
+
+        with caplog.at_level(logging.INFO), pytest.raises(RsyncUnavailable):
+            run_all_backups(options=options, args=_args())
+
+        assert "Unexpected error" not in caplog.text
+
     @pytest.mark.parametrize("shape", ["wrongly typed value", "directory"])
     def test_all_run_survives_a_snapshot_that_used_to_crash(
         self, make_options, monkeypatch, caplog, shape

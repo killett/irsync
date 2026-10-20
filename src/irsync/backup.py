@@ -19,6 +19,7 @@ from irsync.paths import with_trailing_slash
 from irsync.preflight import (
     DestinationNotMounted,
     EndpointNotMounted,
+    RsyncUnavailable,
     UnsafeDestination,
     check_mounted,
     check_rsync_available,
@@ -957,11 +958,16 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
     return inside ``run_backup`` itself, but one raised earlier — from
     ``resolve_endpoints``/``check_mounted``, before ``run_backup``'s own
     try/except is entered — would otherwise escape uncaught here and abort
-    the whole batch instead of just the one drive. Only a real backup
+    the whole batch instead of just the one drive. Any other exception
+    raised for one drive is logged with its traceback and counted the same
+    way, so one drive cannot abort the batch; the exception is
+    :class:`~irsync.preflight.RsyncUnavailable`, which is the whole run's
+    problem and still propagates for ``cli.main`` to report. Only a real backup
     failure (including a drive refused by a guard, such as one whose
-    snapshot is corrupt), an unmounted/unreadable destination, or an
-    unreadable source makes this return 1; a user abort propagates
-    :data:`EXIT_ABORTED` and stops the remaining drives.
+    snapshot is corrupt), an unmounted/unreadable destination, an
+    unreadable source, or such an unexpected exception makes this return 1;
+    a user abort propagates :data:`EXIT_ABORTED` and stops the remaining
+    drives.
 
     Both the skipped and the successfully-backed-up entries are named in the
     summary log line so a cron log records what actually happened.
@@ -1017,6 +1023,21 @@ def run_all_backups(*, options: Options, args: argparse.Namespace) -> int:
             logging.error("Skipping %r (missing/unmounted drive): %s", backup, e)
             missing.append(backup)
             continue
+        except RsyncUnavailable:
+            # Missing rsync is the run's problem, not this drive's: let
+            # cli.main report it once (exit 2) rather than once per drive.
+            raise
+        except Exception:
+            # Backstop for anything the clauses above do not name: an
+            # unforeseen bug, or a failure such as a directory where the
+            # destination's snapshot copy belongs. It is that drive's error,
+            # not the batch's. logging.exception keeps the traceback so a
+            # real bug stays visible; KeyboardInterrupt and SystemExit are
+            # not Exceptions and still stop the run.
+            logging.exception(
+                "Unexpected error backing up %r; counting it as an error.", backup
+            )
+            rc = 1
         if rc == 0:
             successful.append(backup)
         elif rc == EXIT_ABORTED:
