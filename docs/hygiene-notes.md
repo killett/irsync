@@ -788,8 +788,9 @@ this branch. The first three are reproduced hazards and the fourth is an
 observation. For the `TypeError` and `IsADirectoryError` shapes in the third
 item the probe stops at `run_backup`; that the exception then escapes an `ALL`
 batch follows from the `except` clauses of `run_all_backups` and `cli.main`.
-They were filed as the first four Open questions in `PROGRESS.md`; the
-trash replay and the empty baseline have since been fixed (below).
+They were filed as the first four Open questions in `PROGRESS.md`; all three
+reproduced hazards have since been fixed (below). A fifth finding, a path
+escape, surfaced on 2026-10-19 while fixing the third and is listed last.
 
 - **Trash replay.** Files reach a desktop trash by being *moved* there, and
   irsync replayed that move onto the backup. Because `.Trash-*` is excluded
@@ -822,12 +823,23 @@ trash replay and the empty baseline have since been fixed (below).
   run refuses that drive (exit 2) and leaves the file in place. Re-running
   the probe refused each shape and left all five destination files.
 - **Other ways one bad drive can kill an `ALL` run.** A row whose values
-  have the wrong types (`"path": 5`, `"dev": [1]`) raises `TypeError`, and a
-  `.irsync_snapshot.jsonl` that is a directory raises `IsADirectoryError`.
-  Neither is caught by `run_backup`, `run_all_backups` or `cli.main`, so
-  the exception escapes the batch. (`"ino": "a"` and `"size": null` are
+  had the wrong types (`"path": 5`, `"dev": [1]`) raised `TypeError`, and a
+  `.irsync_snapshot.jsonl` that is a directory raised `IsADirectoryError`.
+  Neither was caught by `run_backup`, `run_all_backups` or `cli.main`, so
+  the exception escaped the batch. (`"ino": "a"` and `"size": null` were
   silently accepted.) A per-drive `except Exception` in `run_all_backups`
-  that logs and counts an error would close the whole class.
+  that logs and counts an error would close the whole class. **Fixed on
+  2026-10-19** in two layers. `139db1a` makes `read_snapshot` refuse a
+  snapshot path that is not a regular file (a FIFO used to block `open()`
+  forever) and `_validate_row` refuse a non-`int` or `bool` under an integer
+  key and a non-`str` path, all as `SnapshotCorrupt`, so the drive gets a
+  clean refusal (exit 2). By then `"path": 5` raised `AttributeError` from
+  AD-32's exclude filter rather than `TypeError`. `32e5faf` adds the
+  catch-all (AD-33), logged with its traceback; it caught a remaining
+  shape, a directory where the *destination's* snapshot copy belongs, which
+  raises `IsADirectoryError` while persisting after rsync. `RsyncUnavailable`
+  is re-raised ahead of it, since a missing rsync is the run's problem and
+  `cli.main` reports it once.
 - **Non-ASCII in user-facing strings (pre-existing).** The first-run banner
   in `_format_first_run_preview` contains an em dash. Under `--yes` it is
   printed (interactively it goes to `less` via `_page_output`), so it raises
@@ -838,6 +850,17 @@ trash replay and the empty baseline have since been fixed (below).
   instead of failing. A C locale does not trigger any of this (Python still
   writes UTF-8 there), so it is mostly theoretical. `--help` itself is now
   ASCII and guarded by a test.
+- **Path escape (found 2026-10-19).** `apply_moves` joins each old snapshot
+  path onto the destination unchecked. A probe wrote a snapshot whose row
+  for a real source file carried the path `../outside/victim.txt`, or that
+  file's absolute path, and backed up under `--yes`: irsync moved
+  `victim.txt`, which sat outside both trees, into the backup and exited 0.
+  Anyone able to write a source drive's root could so move any file the
+  irsync user can write. Present in 0.1.0. **Fixed on 2026-10-19** in
+  `0d32b46`: `_validate_row` refuses a path other than `"."` that is
+  absolute, has an empty, `.` or `..` component, or contains NUL (AD-4).
+  Re-running the probe refused the run (exit 2) and left `victim.txt` and
+  the destination alone.
 
 ### Process lessons
 
