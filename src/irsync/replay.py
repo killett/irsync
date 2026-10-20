@@ -84,17 +84,41 @@ def _preflight_check_xdev(
         check(new_rel)
 
 
+def _through_symlink(path: Path) -> bool:
+    """Return True if a directory on the way to ``path`` is a symlink.
+
+    ``path`` must be built on a fully resolved root, so any difference
+    between its parent and that parent's real path is a symlink below the
+    root. Components that do not exist yet resolve to themselves.
+    """
+    return os.path.realpath(path.parent) != str(path.parent)
+
+
 def _move_no_clobber(src: Path, dst: Path) -> str:
     """Atomically rename ``src`` to ``dst`` if ``dst`` does not already exist.
+
+    Both paths must be built on the destination's resolved root (see
+    :func:`_through_symlink`).
 
     Returns:
         ``"moved"`` if the rename happened, ``"skipped_missing_src"`` if the source
         was absent (e.g. dest tree hasn't been seeded yet), ``"skipped_dst_exists"``
-        if the destination already exists.
+        if the destination already exists, ``"skipped_symlinked_parent"`` if
+        either path runs through a symlinked directory.
 
     Raises:
         OSError: With ``errno == EXDEV`` for cross-filesystem moves; other OS errors propagate.
     """
+    # The snapshot walk never descends into a symlink, but the backup can
+    # hold one where the source now has a directory, and a tampered
+    # snapshot can name one. os.rename would follow it out of the backup,
+    # so the move is skipped and rsync transfers the data instead.
+    for p in (src, dst):
+        if _through_symlink(p):
+            logging.warning(
+                "replay: %s runs through a symlink in the destination, skipping", p
+            )
+            return "skipped_symlinked_parent"
     if not src.exists() and not src.is_symlink():
         logging.debug("replay: source missing, skipping: %s", src)
         return "skipped_missing_src"
@@ -144,10 +168,13 @@ def apply_moves(
     dirs_moved = 0
     files_moved = 0
     skipped = 0
+    # Resolved once, so _move_no_clobber can tell a symlink below the root
+    # from one on the way to it (a symlinked mount point is fine).
+    real_root = dest_root.resolve()
 
     for old_rel, new_rel in plan_directory_moves(dir_moves):
-        src = dest_root / PurePosixPath(old_rel)
-        dst = dest_root / PurePosixPath(new_rel)
+        src = real_root / PurePosixPath(old_rel)
+        dst = real_root / PurePosixPath(new_rel)
         outcome = _move_no_clobber(src, dst)
         if outcome == "moved":
             dirs_moved += 1
@@ -157,8 +184,8 @@ def apply_moves(
     subst = make_parent_substituter(dir_moves)
     for old_rel, new_rel in file_moves:
         rewritten = subst(old_rel)
-        src = dest_root / PurePosixPath(rewritten)
-        dst = dest_root / PurePosixPath(new_rel)
+        src = real_root / PurePosixPath(rewritten)
+        dst = real_root / PurePosixPath(new_rel)
         outcome = _move_no_clobber(src, dst)
         if outcome == "moved":
             files_moved += 1

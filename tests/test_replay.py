@@ -195,3 +195,88 @@ class TestApplyMoves:
         )
         assert result.files_moved == 0
         assert result.skipped == 1
+
+
+class TestMovesStayInsideTheDestination:
+    """os.rename follows a symlinked directory in the backup out of it."""
+
+    @staticmethod
+    def _layout(tmp_path):
+        """Return (dest, outside), with dest/link a symlink to ../outside."""
+        dest, outside = tmp_path / "dest", tmp_path / "outside"
+        dest.mkdir()
+        outside.mkdir()
+        os.symlink("../outside", dest / "link")
+        return dest, outside
+
+    def test_old_path_through_a_symlink_is_skipped(self, tmp_path):
+        # Behavior: a move whose old path runs through a symlink in the
+        # backup is skipped; the file the symlink reaches stays put.
+        # Bug caught: os.rename followed dest/link and moved
+        # outside/victim.txt into the backup. A tampered snapshot row
+        # "link/victim.txt" did exactly that end to end, past the row path
+        # check, because the path itself is normalized (reproduced
+        # 2026-10-19).
+        # Expected values: the fixture files written here.
+        dest, outside = self._layout(tmp_path)
+        (outside / "victim.txt").write_text("outside")
+
+        result = apply_moves(
+            dir_moves=[],
+            file_moves=[("link/victim.txt", "new.txt")],
+            dest_root=dest,
+        )
+
+        assert (outside / "victim.txt").read_text() == "outside"
+        assert not (dest / "new.txt").exists()
+        assert result == ReplayResult(dirs_moved=0, files_moved=0, skipped=1)
+
+    @pytest.mark.parametrize("kind", ["file", "directory"])
+    def test_new_path_through_a_symlink_is_skipped(self, tmp_path, kind):
+        # Behavior: a move whose new path runs through a symlink in the
+        # backup is skipped; nothing is written where the symlink points.
+        # Bug caught: after a source symlink was replaced by a real
+        # directory and a file moved into it, os.rename followed the
+        # backup's stale symlink and wrote the file outside the backup, with
+        # no tampering involved (reproduced 2026-10-19). The directory case
+        # catches a check made only in the file-move loop.
+        # Expected values: the fixture files written here.
+        dest, outside = self._layout(tmp_path)
+        if kind == "file":
+            (dest / "a").write_text("a")
+        else:
+            (dest / "a").mkdir()
+            (dest / "a" / "f.txt").write_text("a")
+        moves = [("a", "link/a")]
+
+        result = apply_moves(
+            dir_moves=moves if kind == "directory" else [],
+            file_moves=moves if kind == "file" else [],
+            dest_root=dest,
+        )
+
+        assert list(outside.iterdir()) == []
+        assert (dest / "a").exists()
+        assert result.skipped == 1
+        assert result.files_moved + result.dirs_moved == 0
+
+    def test_destination_reached_through_a_symlink_still_replays(self, tmp_path):
+        # Behavior: when dest_root itself is reached through a symlink (a
+        # symlinked mount point, or macOS's /var), moves still apply.
+        # Bug caught: comparing each parent's real path against the
+        # unresolved dest_root would skip every move for such a backup, so
+        # rsync would re-send every renamed file.
+        # Expected values: the fixture files written here.
+        real = tmp_path / "real_dest"
+        (real / "sub").mkdir(parents=True)
+        (real / "sub" / "a.txt").write_text("a")
+        dest = tmp_path / "dest_link"
+        os.symlink(real, dest)
+
+        result = apply_moves(
+            dir_moves=[], file_moves=[("sub/a.txt", "sub/b.txt")], dest_root=dest
+        )
+
+        assert (real / "sub" / "b.txt").read_text() == "a"
+        assert not (real / "sub" / "a.txt").exists()
+        assert result.files_moved == 1

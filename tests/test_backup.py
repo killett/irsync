@@ -2562,3 +2562,43 @@ class TestCorruptSnapshotRefusesOnlyThatDrive:
         )
         assert "backed up=1 (C)" in summary
         assert "errors=1" in summary
+
+
+class TestReplayStaysInsideTheDestination:
+    def test_symlink_replaced_by_a_directory_writes_nothing_outside(
+        self, tmp_path, basic_options
+    ):
+        # Behavior: when a source symlink becomes a real directory and a
+        # file is moved into it, the backup ends up mirroring the source and
+        # nothing is written where the old symlink pointed.
+        # Bug caught: replay renamed dest/a.txt to dest/link/a.txt while
+        # dest/link was still the old symlink, so a.txt landed in outside/
+        # and the run exited 0 (reproduced 2026-10-19, no tampering).
+        # Expected values: the fixture tree written here.
+        src, dest = tmp_path / "src", tmp_path / "dest"
+        outside = tmp_path / "outside"
+        for d in (src, dest, outside):
+            d.mkdir()
+        os.symlink(outside, src / "link")
+        (src / "a.txt").write_text("source a")
+
+        def backup() -> int:
+            return run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert backup() == 0
+        assert (dest / "link").is_symlink()
+        (src / "link").unlink()
+        (src / "link").mkdir()
+        os.rename(src / "a.txt", src / "link" / "a.txt")
+
+        assert backup() == 0
+
+        assert list(outside.iterdir()) == []
+        assert not (dest / "link").is_symlink()
+        assert (dest / "link" / "a.txt").read_text() == "source a"
+        assert not (dest / "a.txt").exists()
