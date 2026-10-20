@@ -860,7 +860,17 @@ escape, surfaced on 2026-10-19 while fixing the third and is listed last.
   `0d32b46`: `_validate_row` refuses a path other than `"."` that is
   absolute, has an empty, `.` or `..` component, or contains NUL (AD-4).
   Re-running the probe refused the run (exit 2) and left `victim.txt` and
-  the destination alone.
+  the destination alone. A follow-up probe showed the row check alone was
+  not enough: `os.rename` follows a symlinked directory in the backup, so a
+  normalized row `link/victim.txt`, where the backup's `link` pointed at
+  `../outside`, still moved `victim.txt` in. Without any tampering,
+  replacing a source symlink by a real directory and moving a file into it
+  made replay write that file where the backup's stale symlink pointed.
+  Fixed in `ec7ab83` (AD-9): `apply_moves` skips a move whose old or new
+  path runs through a symlinked directory and lets rsync transfer the data.
+  When that symlink points to another filesystem, the EXDEV pre-flight
+  still refuses every run; that predates the branch and is an Open question
+  in `PROGRESS.md`.
 
 ### Process lessons
 
