@@ -19,7 +19,7 @@ def test_version_prints_and_exits_zero():
         check=True,
         env=ENV,
     )
-    assert "0.1.0" in (result.stdout + result.stderr)
+    assert "0.1.1" in (result.stdout + result.stderr)
 
 
 def test_help_runs():
