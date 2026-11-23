@@ -1537,6 +1537,89 @@ class TestDestinationGate:
         assert rc == EXIT_REFUSED
         assert precious.read_text() == "irreplaceable"
 
+    @pytest.mark.parametrize(
+        ("dest_names", "counts", "deleted"),
+        [
+            (
+                ["Films", ".Trash-1000", "stray.txt"],
+                "(1 also on the source, 1 skipped by rsync so kept, "
+                "1 not on the source)",
+                "Not on the source (a real run DELETES these): stray.txt.",
+            ),
+            (
+                ["Films", ".Trash-1000"],
+                "(1 also on the source, 1 skipped by rsync so kept, "
+                "0 not on the source)",
+                None,
+            ),
+        ],
+    )
+    def test_refusal_reports_the_destination_top_level_split(
+        self, tmp_path, basic_options, monkeypatch, caplog, dest_names, counts, deleted
+    ):
+        # The refusal is where the user decides whether to pass
+        # --allow-nonempty-dest. Bug caught: it said "contains 3 entries ...
+        # rsync would DELETE them", counting top-level names without saying
+        # so and claiming every one would be deleted, including a backup's
+        # own matching folders and an excluded trash folder rsync never
+        # touches.
+        src = tmp_path / "src"
+        (src / "Films").mkdir(parents=True)
+        (src / "notes.txt").write_text("n")
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        for name in dest_names:
+            (dest / name).mkdir()
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        with caplog.at_level(logging.ERROR):
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert rc == EXIT_REFUSED
+        message = caplog.text
+        n = len(dest_names)
+        assert f"already holds {n} top-level items {counts}" in message
+        if deleted is None:
+            assert "DELETES these" not in message
+        else:
+            assert deleted in message
+        assert "--allow-nonempty-dest" in message
+
+    def test_refusal_escapes_the_names_it_lists(
+        self, tmp_path, basic_options, monkeypatch, caplog
+    ):
+        # Bug caught: a destination name holding a newline, logged raw, ends
+        # the refusal mid-sentence and starts a line that reads like
+        # irsync's own output.
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.txt").write_text("a")
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        (dest / "two\nlines").write_text("x")
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: pytest.fail("rsync ran")
+        )
+
+        with caplog.at_level(logging.ERROR):
+            rc = run_backup(
+                source_arg=str(src),
+                destination_arg=str(dest),
+                options=basic_options,
+                args=_args(),
+            )
+
+        assert rc == EXIT_REFUSED
+        assert "(a real run DELETES these): two\\nlines." in caplog.text
+        assert "two\nlines" not in caplog.text
+
     def test_allow_nonempty_dest_permits_adoption(
         self, tmp_path, make_tree, basic_options
     ):

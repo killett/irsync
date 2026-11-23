@@ -238,6 +238,15 @@ def _name_list(names: Sequence[str]) -> str:
     return f"{shown} (and {rest:,} more)" if rest > 0 else shown
 
 
+def _split_counts(split: TopLevelSplit) -> str:
+    """Return a split's three counts as one clause, for a one-line message."""
+    return (
+        f"{len(split.on_source):,} also on the source, "
+        f"{len(split.kept):,} skipped by rsync so kept, "
+        f"{len(split.not_on_source):,} not on the source"
+    )
+
+
 def _format_split(split: TopLevelSplit) -> list[str]:
     """Render a destination's top-level split as three right-aligned count lines."""
     groups: list[tuple[str, Sequence[str], bool]] = [
@@ -821,8 +830,11 @@ def _run_backup_for_endpoints(
         source_names = top_level_names(src_root)
     if not have_before and dest_root is not None:
         foreign = foreign_dest_entries(dest_root)
-        if dest_root.exists():
-            dest_split = split_top_level(foreign, source_names, excluded)
+        split = split_top_level(foreign, source_names, excluded)
+        # Names found prove the destination exists even if it vanished since;
+        # only a destination that is not there is reported as missing.
+        if foreign or dest_root.exists():
+            dest_split = split
         # A dry run writes nothing — it is the natural way to inspect what's
         # at the destination before deciding whether to adopt it — so it must
         # not be blocked by the same refusal that guards the real transfer.
@@ -830,17 +842,22 @@ def _run_backup_for_endpoints(
         # preview (``_format_first_run_preview``) reports it regardless of
         # --dry-run.
         if foreign and not args.allow_nonempty_dest and not args.dry_run:
-            shown = ", ".join(foreign[:10])
-            more = f" (and {len(foreign) - 10} more)" if len(foreign) > 10 else ""
+            deleted = (
+                " Not on the source (a real run DELETES these): "
+                f"{_name_list(split.not_on_source)}."
+                if split.not_on_source
+                else ""
+            )
             logging.error(
-                "Refusing: no prior snapshot, but the destination %s already "
-                "contains %d entries: %s%s. rsync would DELETE them. This "
-                "usually means the source drive is not mounted. Pass "
-                "--allow-nonempty-dest to adopt this destination anyway.",
-                dest_root,
-                len(foreign),
-                shown,
-                more,
+                "Refusing: no usable snapshot, but the destination %s already "
+                "holds %s (%s).%s A first backup makes the destination match "
+                "the source and DELETES anything there that is not on the "
+                "source. Check that the source drive is mounted and that this "
+                "is its backup, then pass --allow-nonempty-dest to adopt it.",
+                display_name(str(dest_root)),
+                _count(len(foreign), "top-level item", "top-level items"),
+                _split_counts(split),
+                deleted,
             )
             return EXIT_REFUSED
 
