@@ -116,6 +116,41 @@ for an unknown name. `base_dir` is used only as the mount-gate root (see
 [Safety](#safety)); when no config is loaded it defaults to
 `/media/<your-username>`, which can refuse a run but can never redirect one.
 
+### Previewing drives with a dry run
+
+To see what a backup of some drives would do before running it, give each
+drive its own `--dry-run`, one after another, each into its own file:
+
+```bash
+for d in A B; do
+  irsync $d --dry-run --yes \
+    > ~/irsync-dry-run-$d.txt 2>&1
+done
+```
+
+Then show the results drive by drive:
+
+```bash
+for d in A B; do
+  echo "===== $d ====="
+  grep -A11 'FIRST BACKUP' ~/irsync-dry-run-$d.txt
+  grep -e 'Number of deleted' \
+    -e 'files transferred' \
+    -e 'Total transferred' \
+    ~/irsync-dry-run-$d.txt
+done
+```
+
+For a drive with no snapshot yet, the first `grep` shows the first-backup
+summary; its "not on the source (a real run DELETES these)" line names what
+a real run would remove from the backup. The second shows rsync's totals:
+files it would delete, files it would copy, and bytes. A dry run copies,
+deletes, and renames nothing and saves no snapshot; the only thing it writes
+is the empty `.irsync.lock` at the top of each source. A drive that is not
+plugged in gets an error in its file instead and is left untouched: "does
+not exist" when its folder under the base directory is gone, or "probably
+not mounted" when the folder is there but no drive is mounted on it.
+
 ## Safety
 
 irsync fails closed: when it cannot establish that an endpoint is the drive
