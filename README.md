@@ -151,6 +151,17 @@ plugged in gets an error in its file instead and is left untouched: "does
 not exist" when its folder under the base directory is gone, or "probably
 not mounted" when the folder is there but no drive is mounted on it.
 
+To see every file and folder a real run would delete from each backup,
+drive by drive (rsync marks each one `*deleting`, a folder with a trailing
+`/`; press `q` to leave `less`):
+
+```bash
+for d in A B; do
+  echo "===== $d ====="
+  grep '^\*deleting' ~/irsync-dry-run-$d.txt
+done | less
+```
+
 ## Safety
 
 irsync fails closed: when it cannot establish that an endpoint is the drive
