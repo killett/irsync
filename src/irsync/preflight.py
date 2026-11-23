@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -128,7 +130,7 @@ def check_mounted(
         raise SourceNotMounted(message)
 
 
-def _non_reserved_names(root: Path) -> list[str]:
+def top_level_names(root: Path) -> list[str]:
     """List ``root``'s top-level entries, excluding irsync's own reserved files.
 
     Shared by :func:`foreign_dest_entries` (destination side) and
@@ -156,6 +158,57 @@ def _non_reserved_names(root: Path) -> list[str]:
     return [name for name in names if not is_reserved_root_name(name)]
 
 
+@dataclass(frozen=True)
+class TopLevelSplit:
+    """A destination's top-level names, grouped by what a real run does to them.
+
+    Attributes:
+        kept: Names matching rsync's excludes. rsync never deletes an excluded
+            name on the receiving side, since irsync passes no
+            ``--delete-excluded``.
+        on_source: Names the source's top level also has.
+        not_on_source: Names a real run deletes.
+    """
+
+    kept: tuple[str, ...]
+    on_source: tuple[str, ...]
+    not_on_source: tuple[str, ...]
+
+
+def split_top_level(
+    dest_names: Iterable[str],
+    source_names: Iterable[str],
+    excluded: Callable[[str], bool],
+) -> TopLevelSplit:
+    """Group destination top-level names by whether a real run keeps them.
+
+    The exclude test comes first, so an excluded name is kept whether or not
+    the source has it. Names are compared exactly, as rsync compares them: a
+    different case or Unicode normalization is a different name.
+
+    Args:
+        dest_names: Names directly under the destination root.
+        source_names: Names directly under the source root.
+        excluded: The run's exclude predicate
+            (:func:`~irsync.rsync_runner.exclude_matcher`).
+
+    Returns:
+        The three groups, each sorted.
+    """
+    source = set(source_names)
+    kept: list[str] = []
+    on_source: list[str] = []
+    not_on_source: list[str] = []
+    for name in sorted(dest_names):
+        if excluded(name):
+            kept.append(name)
+        elif name in source:
+            on_source.append(name)
+        else:
+            not_on_source.append(name)
+    return TopLevelSplit(tuple(kept), tuple(on_source), tuple(not_on_source))
+
+
 def foreign_dest_entries(dest_root: Path) -> list[str]:
     """Return destination-root entries that are not irsync's own files.
 
@@ -176,7 +229,7 @@ def foreign_dest_entries(dest_root: Path) -> list[str]:
             closed rather than reporting no entries.
     """
     try:
-        return _non_reserved_names(dest_root)
+        return top_level_names(dest_root)
     except (FileNotFoundError, NotADirectoryError):
         return []
     except PermissionError as e:
@@ -209,7 +262,7 @@ def source_root_is_empty(src_root: Path) -> bool:
             guessing empty or non-empty.
     """
     try:
-        return not _non_reserved_names(src_root)
+        return not top_level_names(src_root)
     except (FileNotFoundError, NotADirectoryError):
         return True
 

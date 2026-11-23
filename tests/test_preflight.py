@@ -14,7 +14,9 @@ from irsync.preflight import (
     fresh_snapshot_is_empty,
     mount_gate_root,
     source_root_is_empty,
+    split_top_level,
 )
+from irsync.rsync_runner import exclude_matcher
 from irsync.snapshot import LOCKFILE_NAME, SNAPSHOT_FILENAME
 
 
@@ -191,6 +193,48 @@ class TestForeignDestEntries:
             dest.chmod(0o755)
 
 
+class TestSplitTopLevel:
+    # The destination's top level, unsorted, as a listing might not be.
+    DEST = ["old_stuff", "Films", ".Trash-1000", "unfinished_downloads", "Z_TV"]
+    SOURCE = ["Films", "NewDir", "Z_TV", "unfinished_downloads"]
+
+    def test_names_fall_into_kept_on_source_and_not_on_source(self):
+        # Bug caught: an excluded name reported as deleted (rsync never
+        # deletes an excluded name, since irsync passes no
+        # --delete-excluded), an excluded name that is also on the source
+        # counted as on-source instead of kept, or unsorted output that
+        # makes the summary's name lists change from run to run.
+        excluded = exclude_matcher([".Trash-*", ".cache", "unfinished_downloads"])
+
+        split = split_top_level(self.DEST, self.SOURCE, excluded)
+
+        assert split.kept == (".Trash-1000", "unfinished_downloads")
+        assert split.on_source == ("Films", "Z_TV")
+        assert split.not_on_source == ("old_stuff",)
+
+    def test_with_nothing_excluded_an_unmatched_name_would_be_deleted(self):
+        # Bug caught: the split ignoring the predicate it is given (say, a
+        # hardcoded exclude list), so under --no-exclude it would still
+        # call .Trash-1000 kept while rsync deletes it.
+        split = split_top_level(self.DEST, self.SOURCE, exclude_matcher([]))
+
+        assert split.kept == ()
+        assert split.on_source == ("Films", "Z_TV", "unfinished_downloads")
+        assert split.not_on_source == (".Trash-1000", "old_stuff")
+
+    def test_names_match_exactly_as_rsync_compares_them(self):
+        # Bug caught: a case-folding or Unicode-normalizing comparison
+        # reports "films" as on the source, hiding that a real run deletes
+        # it (rsync compares bytes, so "Films" does not save "films").
+        source = ["Films", "café"]  # "café" decomposed (NFD)
+        dest = ["films", "café"]  # "café" precomposed (NFC)
+
+        split = split_top_level(dest, source, exclude_matcher([]))
+
+        assert split.on_source == ()
+        assert split.not_on_source == ("café", "films")
+
+
 class TestSourceRootIsEmpty:
     def test_empty_source_is_empty(self, tmp_path):
         assert source_root_is_empty(tmp_path) is True
@@ -211,7 +255,7 @@ class TestSourceRootIsEmpty:
         assert source_root_is_empty(tmp_path / "not_created_yet") is True
 
     def test_unreadable_source_fails_closed(self, tmp_path):
-        # M1: a PermissionError from _non_reserved_names used to be the only
+        # M1: a PermissionError from top_level_names used to be the only
         # one of its siblings not caught here, escaping uncaught instead of
         # failing closed like foreign_dest_entries does on the destination
         # side. An unreadable source is not a proven-non-empty one, so this
