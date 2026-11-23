@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,7 @@ from irsync.snapshot import (
 )
 
 from .conftest import cli_args as _args
-from .conftest import inode_for, tree_signature
+from .conftest import inode_for, subprocess_pythonpath, tree_signature
 
 _INTERNAL_FILES = {SNAPSHOT_FILENAME, LOCKFILE_NAME}
 
@@ -63,6 +64,73 @@ class TestFormatPreview:
         assert "docs/report.md" in text
         assert "src/app.py" in text
         assert "Modified" in text
+
+    def test_every_section_escapes_undecodable_bytes(self):
+        # Bug caught: a section that skips display_name leaves a lone
+        # surrogate in the text, which crashes on a strict stdout and on the
+        # pipe to less. Each path carries a different byte so a section that
+        # forgot to escape cannot hide behind another section's output.
+        changes = Changes(
+            dir_moves=[("d\udcff", "e\udcfe")],
+            file_moves=[("f\udc80", "g\udc81")],
+            modified=["m\udc82"],
+            created=["c\udc83"],
+            deleted=["x\udc84"],
+        )
+        text = _format_preview(changes)
+        text.encode("utf-8")  # strict: raises if any surrogate survived
+        for shown in (
+            "d\\xff",
+            "e\\xfe",
+            "f\\x80",
+            "g\\x81",
+            "m\\x82",
+            "c\\x83",
+            "x\\x84",
+        ):
+            assert shown in text, f"{shown!r} missing from preview"
+
+    def test_a_newline_in_a_name_cannot_add_a_preview_line(self):
+        # Bug caught: printed raw, this deletion's name renders as two
+        # lines, the second of which reads like a section header the run
+        # never produced.
+        changes = Changes(deleted=["evil\n=== File moves (0) ==="])
+        lines = _format_preview(changes).splitlines()
+        assert "  - evil\\n=== File moves (0) ===" in lines
+        assert lines.count("=== File moves (0) ===") == 1
+
+
+class TestPreviewNamesSurviveStrictOutput:
+    def test_moved_non_utf8_file_does_not_crash_a_yes_run(self, tmp_path):
+        # Reproduced 2026-11-22 against 0.1.1: with a strict UTF-8 stdout
+        # (an ordinary UTF-8 desktop locale), moving a file whose name holds
+        # the byte 0xff made every later --yes run log "surrogates not
+        # allowed" and exit 2 before rsync, so that source could never be
+        # backed up again until the file was renamed.
+        src = tmp_path / "src"
+        dest = tmp_path / "dest"
+        src.mkdir()
+        dest.mkdir()
+        src_b = os.fsencode(src)
+        (Path(os.fsdecode(src_b + b"/bad-\xff.txt"))).write_bytes(b"payload")
+        cmd = [sys.executable, "-m", "irsync", str(src), str(dest), "--yes"]
+        env = {
+            **os.environ,
+            "PYTHONPATH": subprocess_pythonpath(),
+            "PYTHONIOENCODING": "utf-8:strict",
+        }
+        first = subprocess.run(cmd, env=env, capture_output=True, check=False)
+        assert first.returncode == 0, first.stderr.decode(errors="replace")
+        os.rename(src_b + b"/bad-\xff.txt", src_b + b"/moved-\xff.txt")
+
+        second = subprocess.run(cmd, env=env, capture_output=True, check=False)
+
+        assert second.returncode == 0, second.stderr.decode(errors="replace")
+        assert b"bad-\\xff.txt  ->  moved-\\xff.txt" in second.stdout
+        assert sorted(os.listdir(os.fsencode(dest))) == [
+            SNAPSHOT_FILENAME.encode(),
+            b"moved-\xff.txt",
+        ]
 
 
 @pytest.fixture

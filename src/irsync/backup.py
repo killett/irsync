@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from irsync.diff import Changes, compute_changes
+from irsync.display import display_name
 from irsync.options import Endpoints, Options, resolve_endpoints, resolve_source
 from irsync.paths import with_trailing_slash
 from irsync.preflight import (
@@ -160,30 +161,32 @@ def _format_preview(changes: Changes) -> str:
 
     The deletion list is the safety-critical part: rsync's ``--delete-before`` will
     remove these from the backup tree, so the user must see the actual paths (not
-    just a count) before saying yes.
+    just a count) before saying yes. Every path goes through
+    :func:`~irsync.display.display_name`, so an undecodable byte cannot crash the
+    print or the pager and a newline in a name cannot fake a line.
     """
     lines: list[str] = []
     lines.append(f"=== Directory moves ({len(changes.dir_moves)}) ===")
     for o, n in changes.dir_moves:
-        lines.append(f"  {o}  ->  {n}")
+        lines.append(f"  {display_name(o)}  ->  {display_name(n)}")
     lines.append(f"=== File moves ({len(changes.file_moves)}) ===")
     for o, n in changes.file_moves:
-        lines.append(f"  {o}  ->  {n}")
+        lines.append(f"  {display_name(o)}  ->  {display_name(n)}")
     lines.append(
         f"=== Modified in place, will be re-transferred ({len(changes.modified)}) ==="
     )
     for p in changes.modified:
-        lines.append(f"  ~ {p}")
+        lines.append(f"  ~ {display_name(p)}")
     lines.append(
         f"=== Created on source, will be transferred ({len(changes.created)}) ==="
     )
     for p in changes.created:
-        lines.append(f"  + {p}")
+        lines.append(f"  + {display_name(p)}")
     lines.append(
         f"=== Deleted on source, will be REMOVED FROM BACKUP ({len(changes.deleted)}) ==="
     )
     for p in changes.deleted:
-        lines.append(f"  - {p}")
+        lines.append(f"  - {display_name(p)}")
     return "\n".join(lines) + "\n"
 
 
