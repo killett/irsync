@@ -209,6 +209,7 @@ the prompt (130).
 ```
 src/irsync/
   paths.py          # is_rsync_remote, ensure_local_dir, with_trailing_slash
+  display.py        # display_name — file names made safe to print in previews
   snapshot.py       # snapshot_tree, write_snapshot, read_snapshot, SNAPSHOT_FILENAME
   statx.py          # ctypes statx(2) wrapper — inode birth time (btime)
   preflight.py      # mount / empty-source / nonempty-dest / rsync-present guards
