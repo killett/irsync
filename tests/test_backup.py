@@ -115,7 +115,13 @@ class TestPreviewNamesSurviveStrictOutput:
         src.mkdir()
         dest.mkdir()
         src_b = os.fsencode(src)
-        (Path(os.fsdecode(src_b + b"/bad-\xff.txt"))).write_bytes(b"payload")
+        try:
+            with open(src_b + b"/bad-\xff.txt", "wb") as f:
+                f.write(b"payload")
+        except OSError as e:
+            # macOS APFS refuses a name that is not valid UTF-8 (EILSEQ), so
+            # there such a file, and this crash, cannot exist.
+            pytest.skip(f"filesystem rejected byte-named file: {e}")
         cmd = [sys.executable, "-m", "irsync", str(src), str(dest), "--yes"]
         env = {
             **os.environ,
