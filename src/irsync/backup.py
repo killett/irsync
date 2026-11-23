@@ -10,7 +10,7 @@ import os
 import shutil
 import subprocess  # noqa: S404 — needed for paging via less
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from irsync.diff import Changes, compute_changes
@@ -21,12 +21,15 @@ from irsync.preflight import (
     DestinationNotMounted,
     EndpointNotMounted,
     RsyncUnavailable,
+    TopLevelSplit,
     UnsafeDestination,
     check_mounted,
     check_rsync_available,
     foreign_dest_entries,
     fresh_snapshot_is_empty,
     source_root_is_empty,
+    split_top_level,
+    top_level_names,
 )
 from irsync.replay import CrossDeviceMoveError, apply_moves
 from irsync.rsync_runner import (
@@ -216,39 +219,114 @@ def _format_size(total_bytes: int) -> str:
     return f"{value:.1f} TiB"  # unreachable, satisfies mypy's no-implicit-return
 
 
+_SUMMARY_INDENT = " " * len("Destination: ")
+"""Lines up a summary's detail lines under its ``Source:``/``Destination:`` values."""
+
+_NAMES_SHOWN = 10
+"""How many names a summary group lists before ``(and N more)``."""
+
+
+def _count(n: int, singular: str, plural: str) -> str:
+    """Return ``n`` with thousands separators and the noun that agrees with it."""
+    return f"{n:,} {singular if n == 1 else plural}"
+
+
+def _name_list(names: Sequence[str]) -> str:
+    """Return the first :data:`_NAMES_SHOWN` names, escaped, and how many more."""
+    shown = ", ".join(display_name(name) for name in names[:_NAMES_SHOWN])
+    rest = len(names) - _NAMES_SHOWN
+    return f"{shown} (and {rest:,} more)" if rest > 0 else shown
+
+
+def _format_split(split: TopLevelSplit) -> list[str]:
+    """Render a destination's top-level split as three right-aligned count lines."""
+    groups: list[tuple[str, Sequence[str], bool]] = [
+        ("also on the source", split.on_source, False),
+        ("skipped by rsync, so kept", split.kept, True),
+        ("not on the source (a real run DELETES these)", split.not_on_source, True),
+    ]
+    width = max(len(f"{len(names):,}") for _, names, _ in groups)
+    lines: list[str] = []
+    for label, names, list_names in groups:
+        line = f"{_SUMMARY_INDENT}  {len(names):>{width},} {label}"
+        if list_names and names:
+            line += f": {_name_list(names)}"
+        lines.append(line)
+    return lines
+
+
 def _format_first_run_preview(
     rows: list[Row],
     src_root: Path,
+    source_top_level: int,
     dest_root: Path | None,
-    foreign_count: int,
+    dest_split: TopLevelSplit | None,
+    *,
+    show_hint: bool,
 ) -> str:
     """Summarize a backup that has no baseline to diff against.
 
-    With no prior snapshot there is no move/delete plan to show, but the run
-    is the most consequential one: it transfers the whole source and removes
-    anything at the destination that is not on it. Report the scale of both
-    so the confirmation prompt is not answered blind.
+    With no usable snapshot there is no move/delete plan to show, but the run
+    can delete anything at the destination that is not on the source. Both
+    sides are counted at their top level, the same way, so an up-to-date
+    backup does not look nearly empty beside the source's full entry count,
+    and the destination's top-level names are split by what a real run does
+    to them. Neither tree is scanned for this beyond the listings the run
+    already makes.
+
+    Args:
+        rows: The source's fresh snapshot rows, root row included.
+        src_root: The source root.
+        source_top_level: How many names the source root holds, irsync's own
+            files left out.
+        dest_root: The local destination root, or None for a remote one,
+            which is never listed (AD-25).
+        dest_split: The destination's top level split by
+            :func:`~irsync.preflight.split_top_level`, or None when the local
+            destination does not exist yet.
+        show_hint: Whether to point at ``--dry-run``; only useful when a
+            prompt follows and the run is not already a dry run.
+
+    Returns:
+        The summary text, ASCII apart from the escaped paths and names in it.
     """
     total_bytes = sum(r["size"] for r in rows if r["type"] == "f")
-    size_str = _format_size(total_bytes)
-    # A remote destination is never scanned for foreign_dest_entries (the
-    # destination gate only lists a local destination's entries), so
-    # foreign_count is always 0 here — not because the destination is empty,
-    # but because it was never checked. Say so instead of presenting an
-    # unchecked 0 as fact.
-    if dest_root is None:
-        dest_desc = "n/a (remote)"
-        existing_desc = "not checked (remote)"
-    else:
-        dest_desc = str(dest_root)
-        existing_desc = f"{foreign_count} existing entries"
+    in_all = sum(1 for r in rows if r["path"] != ".")
     lines = [
-        "=== FIRST BACKUP — no prior snapshot ===",
-        f"Source:      {src_root}   {len(rows):,} entries, {size_str}",
-        f"Destination: {dest_desc}   {existing_desc}",
-        "rsync will transfer the source in full and DELETE anything at the",
-        "destination that is not on the source.",
+        "=== FIRST BACKUP (no usable snapshot) ===",
+        f"Source:      {display_name(str(src_root))}",
+        _SUMMARY_INDENT + _count(source_top_level, "top-level item", "top-level items"),
+        _SUMMARY_INDENT
+        + _count(in_all, "file or folder", "files and folders")
+        + f" in all, {_format_size(total_bytes)}",
     ]
+    if dest_root is None:
+        lines.append("Destination: not checked (remote)")
+    else:
+        lines.append(f"Destination: {display_name(str(dest_root))}")
+        if dest_split is None:
+            lines.append(f"{_SUMMARY_INDENT}does not exist yet (rsync will create it)")
+        else:
+            total = (
+                len(dest_split.kept)
+                + len(dest_split.on_source)
+                + len(dest_split.not_on_source)
+            )
+            if total == 0:
+                lines.append(f"{_SUMMARY_INDENT}empty")
+            else:
+                lines.append(
+                    _SUMMARY_INDENT
+                    + _count(total, "top-level item", "top-level items")
+                    + ":"
+                )
+                lines.extend(_format_split(dest_split))
+    lines += [
+        "A real run makes the destination match the source: it copies",
+        "whatever differs and DELETES anything there that is not on the source.",
+    ]
+    if show_hint:
+        lines.append("For the exact list of files, answer N and rerun with --dry-run.")
     return "\n".join(lines) + "\n"
 
 
@@ -668,13 +746,15 @@ def _run_backup_for_endpoints(
     else:
         logging.info("No prior snapshot; treating as first backup.")
 
+    # rsync's excludes, as a predicate: what the diff covers and, on a first
+    # backup, which destination names a real run leaves alone.
+    excluded = exclude_matcher([] if args.no_exclude else options.exclude_dirs)
     if have_before:
         # Diff only what rsync transfers. A move into an excluded directory,
         # such as a file sent to the desktop trash, is then a deletion from
         # the backup instead of a move replayed where --delete-before never
         # reaches it. before_rows is narrowed too, so the >50% guard below
         # counts deletions against the same tree.
-        excluded = exclude_matcher([] if args.no_exclude else options.exclude_dirs)
         before_rows = [r for r in before_rows if not excluded(r["path"])]
         changes = compute_changes(
             before_rows, [r for r in fresh_rows if not excluded(r["path"])]
@@ -735,8 +815,14 @@ def _run_backup_for_endpoints(
     # everything at the destination that is not on it. If the destination
     # already holds data, that is the unmounted-source scenario — refuse.
     foreign: list[str] = []
+    source_names: list[str] = []
+    dest_split: TopLevelSplit | None = None
+    if not have_before:
+        source_names = top_level_names(src_root)
     if not have_before and dest_root is not None:
         foreign = foreign_dest_entries(dest_root)
+        if dest_root.exists():
+            dest_split = split_top_level(foreign, source_names, excluded)
         # A dry run writes nothing — it is the natural way to inspect what's
         # at the destination before deciding whether to adopt it — so it must
         # not be blocked by the same refusal that guards the real transfer.
@@ -765,7 +851,14 @@ def _run_backup_for_endpoints(
         _show_preview(changes, interactive=not args.yes)
     else:
         _emit_preview(
-            _format_first_run_preview(fresh_rows, src_root, dest_root, len(foreign)),
+            _format_first_run_preview(
+                fresh_rows,
+                src_root,
+                len(source_names),
+                dest_root,
+                dest_split,
+                show_hint=not args.yes and not args.dry_run,
+            ),
             interactive=not args.yes,
         )
     if not _confirm_or_abort(args):

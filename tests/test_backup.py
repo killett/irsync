@@ -19,9 +19,12 @@ from irsync.backup import (
     run_backup,
 )
 from irsync.diff import Changes
+from irsync.preflight import TopLevelSplit
 from irsync.snapshot import (
     LOCKFILE_NAME,
     SNAPSHOT_FILENAME,
+    Row,
+    RowType,
     snapshot_tree,
     write_snapshot,
 )
@@ -1975,26 +1978,248 @@ class TestFirstRunPreview:
         assert "DELETE" in out
 
     def test_remote_destination_reports_unchecked_not_a_fabricated_zero(self, tmp_path):
-        # A remote destination is never scanned by foreign_dest_entries (Task
-        # 3 only counts a local dest), so foreign_count is always 0 for a
-        # remote dest -- not because it's empty, but because it was never
-        # checked. The summary must say so instead of asserting "0 existing
-        # entries" as if that were a verified fact.
-        rows: list = [
-            {
-                "dev": 1,
-                "ino": 1,
-                "type": "f",
-                "nlink": 1,
-                "size": 10,
-                "mtime_ns": 0,
-                "btime_ns": -1,
-                "path": "a.txt",
-            }
-        ]
-        text = _format_first_run_preview(rows, tmp_path / "src", None, 0)
-        assert "not checked" in text
-        assert "0 existing entries" not in text
+        # A remote destination is never listed (AD-25), so the summary has no
+        # counts for it -- not because it's empty, but because it was never
+        # checked. Bug caught: presenting an unchecked destination as having
+        # top-level items, or a split, as if that were a verified fact.
+        rows = [_row(".", "d"), _row("a.txt", "f", 10)]
+        text = _format_first_run_preview(
+            rows, tmp_path / "src", 1, None, None, show_hint=False
+        )
+        assert "Destination: not checked (remote)" in text.splitlines()
+        assert "top-level items:" not in text
+        assert "also on the source" not in text
+
+
+def _row(path: str, type_: RowType, size: int = 0) -> Row:
+    """A snapshot row for formatter tests, where only path/type/size matter."""
+    return Row(
+        dev=1, ino=1, type=type_, nlink=1, size=size, mtime_ns=0, btime_ns=-1, path=path
+    )
+
+
+def _lines(text: str) -> list[str]:
+    """The summary's lines with their indentation removed."""
+    return [line.strip() for line in text.splitlines()]
+
+
+class TestFirstRunSummaryCounts:
+    def test_identical_backup_reports_like_with_like_counts(
+        self, tmp_path, basic_options, capsys
+    ):
+        # The bug this summary was rewritten for (2026-11-22): the source
+        # figure counted every snapshot row at every depth while the
+        # destination figure counted top-level names only, so an identical
+        # backup read "70,995 entries" vs "12 existing entries". Hand count
+        # for this tree: top level a, b.txt, c (3); in all a, a/1.txt,
+        # a/2.txt, b.txt, c (5, the root itself not counted); 10+20+30 = 60
+        # bytes of file data.
+        src = tmp_path / "src"
+        (src / "a").mkdir(parents=True)
+        (src / "a" / "1.txt").write_bytes(b"x" * 10)
+        (src / "a" / "2.txt").write_bytes(b"x" * 20)
+        (src / "b.txt").write_bytes(b"x" * 30)
+        (src / "c").mkdir()
+        dest = tmp_path / "dest"
+        shutil.copytree(src, dest)
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(allow_nonempty_dest=True),
+        )
+
+        assert rc == 0
+        lines = _lines(capsys.readouterr().out)
+        assert lines.count("3 top-level items") == 1  # the source
+        assert "5 files and folders in all, 60 B" in lines
+        assert "3 top-level items:" in lines  # the destination
+        assert "3 also on the source" in lines
+        assert "0 skipped by rsync, so kept" in lines
+        assert "0 not on the source (a real run DELETES these)" in lines
+
+    @pytest.mark.parametrize(
+        ("no_exclude", "kept_line", "deleted_line"),
+        [
+            (
+                False,
+                "1 skipped by rsync, so kept: .Trash-1000",
+                "1 not on the source (a real run DELETES these): stray.txt",
+            ),
+            (
+                True,
+                "0 skipped by rsync, so kept",
+                "2 not on the source (a real run DELETES these): .Trash-1000, stray.txt",
+            ),
+        ],
+    )
+    def test_destination_split_uses_the_runs_excludes(
+        self, tmp_path, basic_options, capsys, no_exclude, kept_line, deleted_line
+    ):
+        # Bug caught: the orchestrator building the split from the wrong
+        # lists (the destination's names on both sides, say) or ignoring
+        # --no-exclude, under which rsync does delete .Trash-1000.
+        src = tmp_path / "src"
+        (src / "Films").mkdir(parents=True)
+        (src / "notes.txt").write_text("n")
+        dest = tmp_path / "dest"
+        (dest / "Films").mkdir(parents=True)
+        (dest / ".Trash-1000").mkdir()
+        (dest / "stray.txt").write_text("s")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(dry_run=True, no_exclude=no_exclude),
+        )
+
+        assert rc == 0
+        lines = _lines(capsys.readouterr().out)
+        assert "3 top-level items:" in lines
+        assert "1 also on the source" in lines
+        assert kept_line in lines
+        assert deleted_line in lines
+
+    @pytest.mark.parametrize(
+        ("setup", "expected"),
+        [
+            ("missing", "does not exist yet (rsync will create it)"),
+            ("empty", "empty"),
+            ("only_irsync_files", "empty"),
+        ],
+    )
+    def test_destination_with_nothing_to_compare_says_which_case(
+        self, tmp_path, make_tree, basic_options, capsys, setup, expected
+    ):
+        # Bug caught: a destination that does not exist reported as having
+        # "0 top-level items" (as if it had been listed), or irsync's own
+        # snapshot and lock from an interrupted first backup counted as the
+        # user's data.
+        src = tmp_path / "src"
+        make_tree(src, num_files=3, depth=1)
+        dest = tmp_path / "dest"
+        if setup != "missing":
+            dest.mkdir()
+        if setup == "only_irsync_files":
+            (dest / SNAPSHOT_FILENAME).write_text("{}\n")
+            (dest / LOCKFILE_NAME).write_text("")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(dry_run=True),
+        )
+
+        assert rc == 0
+        lines = _lines(capsys.readouterr().out)
+        dest_line = lines.index(f"Destination: {dest}")
+        assert lines[dest_line + 1] == expected
+
+    @pytest.mark.parametrize(
+        ("yes", "dry_run", "hint_shown"),
+        [(False, False, True), (True, False, False), (False, True, False)],
+    )
+    def test_dry_run_hint_only_when_there_is_a_prompt_to_answer(
+        self, src_dest, basic_options, monkeypatch, capsys, yes, dry_run, hint_shown
+    ):
+        # Bug caught: "answer N and rerun with --dry-run" printed into a
+        # --yes run's cron log, where nobody answers anything, or shown
+        # during a --dry-run, which is already that rerun.
+        src, dest = src_dest
+        paged: list[str] = []
+        monkeypatch.setattr(
+            "irsync.backup._page_output", lambda text: paged.append(text)
+        )
+        monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=basic_options,
+            args=_args(yes=yes, dry_run=dry_run),
+        )
+
+        assert rc == 0
+        shown = "".join(paged) + capsys.readouterr().out
+        assert "FIRST BACKUP" in shown  # the summary itself was shown
+        assert ("rerun with --dry-run" in shown) is hint_shown
+
+
+class TestFirstRunSummaryFormat:
+    def test_long_name_lists_stop_at_ten_and_count_the_rest(self, tmp_path):
+        # Bug caught: listing all 1,000 names, listing them unsorted, a wrong
+        # remainder, or a count printed without its thousands separator.
+        names = tuple(f"n{i:04d}" for i in range(1000))
+        split = TopLevelSplit(kept=(), on_source=(), not_on_source=names)
+        rows = [_row(".", "d"), _row("x", "f", 1)]
+
+        text = _format_first_run_preview(
+            rows, tmp_path / "src", 1, tmp_path / "dest", split, show_hint=False
+        )
+
+        lines = _lines(text)
+        assert "1,000 top-level items:" in lines
+        assert (
+            "1,000 not on the source (a real run DELETES these): n0000, n0001, "
+            "n0002, n0003, n0004, n0005, n0006, n0007, n0008, n0009 "
+            "(and 990 more)"
+        ) in lines
+
+    def test_counts_of_one_are_singular(self, tmp_path):
+        # Bug caught: "1 top-level items" / "1 files and folders in all".
+        split = TopLevelSplit(kept=(), on_source=("only.txt",), not_on_source=())
+        rows = [_row(".", "d"), _row("only.txt", "f", 5)]
+
+        text = _format_first_run_preview(
+            rows, tmp_path / "src", 1, tmp_path / "dest", split, show_hint=False
+        )
+
+        lines = _lines(text)
+        assert "1 top-level item" in lines
+        assert "1 file or folder in all, 5 B" in lines
+        assert "1 top-level item:" in lines
+
+    def test_fixed_text_is_ascii(self, tmp_path):
+        # Bug caught: a non-ASCII character in the summary's own wording
+        # (the old banner's em dash) raises UnicodeEncodeError under --yes
+        # on an ASCII-only stdout. Every group and the hint are populated so
+        # all of the fixed text is rendered.
+        split = TopLevelSplit(
+            kept=(".Trash-1000",), on_source=("Films",), not_on_source=("old",)
+        )
+        rows = [_row(".", "d"), _row("Films", "d")]
+
+        text = _format_first_run_preview(
+            rows, tmp_path / "src", 1, tmp_path / "dest", split, show_hint=True
+        )
+
+        assert text.isascii(), [c for c in text if not c.isascii()]
+
+    def test_paths_and_names_are_escaped(self, tmp_path):
+        # Bug caught: the summary printing a root path or a destination
+        # name raw, so an undecodable byte crashes the print (the bug
+        # display_name fixed in the change preview) or a newline fakes a
+        # line.
+        src = Path(os.fsdecode(os.fsencode(tmp_path) + b"/src-\xff"))
+        split = TopLevelSplit(
+            kept=(), on_source=(), not_on_source=("bad-\udcfe", "two\nlines")
+        )
+        rows = [_row(".", "d"), _row("a", "f", 1)]
+
+        text = _format_first_run_preview(
+            rows, src, 1, tmp_path / "dest", split, show_hint=False
+        )
+
+        text.encode("utf-8")  # strict: raises if any surrogate survived
+        lines = _lines(text)
+        assert f"Source:      {tmp_path}/src-\\xff" in lines
+        assert (
+            "2 not on the source (a real run DELETES these): bad-\\xfe, two\\nlines"
+            in lines
+        )
 
 
 class TestCleanRefusals:

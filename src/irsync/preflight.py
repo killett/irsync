@@ -133,8 +133,9 @@ def check_mounted(
 def top_level_names(root: Path) -> list[str]:
     """List ``root``'s top-level entries, excluding irsync's own reserved files.
 
-    Shared by :func:`foreign_dest_entries` (destination side) and
-    :func:`source_root_is_empty` (source side). The reserved-name rule
+    Shared by :func:`foreign_dest_entries` (destination side),
+    :func:`source_root_is_empty` (source side), and the first-run summary,
+    which counts both sides' top level with this one rule. The reserved-name rule
     itself is :func:`~irsync.snapshot.is_reserved_root_name`, the same
     predicate the snapshot walk uses, so adding a reserved file is a
     one-place change.
