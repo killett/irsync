@@ -39,6 +39,10 @@ irsync /mnt/data /mnt/data_backup --yes
 # Force a full rsync run even when the snapshot says nothing changed.
 irsync /mnt/data /mnt/data_backup --yes --force
 
+# Also back up what is normally skipped (.Trash-*, .cache,
+# unfinished_downloads). This always runs rsync, changed or not.
+irsync /mnt/data /mnt/data_backup --no-exclude
+
 # Take a baseline snapshot without backing up (e.g. before a big reorg).
 irsync /mnt/data --snapshot-only
 

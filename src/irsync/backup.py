@@ -159,7 +159,7 @@ def _persist_snapshots(rows: list[Row], src_root: Path, dest_root: Path | None) 
     _atomic_write_snapshot(rows, src_root, src_root / SNAPSHOT_FILENAME)
 
 
-def _format_preview(changes: Changes) -> str:
+def _format_preview(changes: Changes, *, unexcluded: Sequence[str] = ()) -> str:
     """Build the full pre-confirmation preview text — every move, deletion, creation.
 
     The deletion list is the safety-critical part: rsync's ``--delete-before`` will
@@ -167,8 +167,29 @@ def _format_preview(changes: Changes) -> str:
     just a count) before saying yes. Every path goes through
     :func:`~irsync.display.display_name`, so an undecodable byte cannot crash the
     print or the pager and a newline in a name cannot fake a line.
+
+    Args:
+        changes: The snapshot diff to list.
+        unexcluded: The default exclude patterns this run does not apply
+            (``--no-exclude``). When non-empty, a note opens the preview:
+            rsync also syncs those names on the backup, copying and deleting
+            files the lists do not show.
+
+    Returns:
+        The preview text, ending in a newline.
     """
     lines: list[str] = []
+    if unexcluded:
+        lines.append(f"=== --no-exclude: rsync also syncs {', '.join(unexcluded)} ===")
+        lines.append(
+            "On the backup, rsync makes these match the source, copying and DELETING"
+        )
+        lines.append(
+            "files there. The lists below show only what changed on the source since"
+        )
+        lines.append(
+            "the last backup; --dry-run shows every file rsync will copy or delete."
+        )
     lines.append(f"=== Directory moves ({len(changes.dir_moves)}) ===")
     for o, n in changes.dir_moves:
         lines.append(f"  {display_name(o)}  ->  {display_name(n)}")
@@ -380,9 +401,13 @@ def _emit_preview(text: str, *, interactive: bool) -> None:
         print(text)
 
 
-def _show_preview(changes: Changes, *, interactive: bool) -> None:
+def _show_preview(
+    changes: Changes, *, interactive: bool, unexcluded: Sequence[str] = ()
+) -> None:
     """Render the change preview, paging through ``less`` if interactive."""
-    _emit_preview(_format_preview(changes), interactive=interactive)
+    _emit_preview(
+        _format_preview(changes, unexcluded=unexcluded), interactive=interactive
+    )
 
 
 def _confirm_or_abort(args: argparse.Namespace) -> bool:
@@ -758,6 +783,10 @@ def _run_backup_for_endpoints(
     # rsync's excludes, as a predicate: what the diff covers and, on a first
     # backup, which destination names a real run leaves alone.
     excluded = exclude_matcher([] if args.no_exclude else options.exclude_dirs)
+    # What --no-exclude adds back. Runs with the default excludes never
+    # copied these, so the backup can lack them however unchanged the source
+    # is, and rsync syncs them without the diff showing it.
+    unexcluded = options.exclude_dirs if args.no_exclude else []
     if have_before:
         # Diff only what rsync transfers. A move into an excluded directory,
         # such as a file sent to the desktop trash, is then a deletion from
@@ -777,8 +806,17 @@ def _run_backup_for_endpoints(
             len(changes.deleted),
         )
         if not changes.any_changes() and not args.force:
-            logging.info("No source changes since last backup; backup drive untouched.")
-            return 0
+            if not unexcluded:
+                logging.info(
+                    "No source changes since last backup; backup drive untouched."
+                )
+                return 0
+            logging.info(
+                "No source changes since last backup, but --no-exclude: running "
+                "rsync anyway so the backup gets what the default excludes skip "
+                "(%s).",
+                ", ".join(unexcluded),
+            )
         # Sanity check: a diff that says >50% of the previous tree is gone
         # is almost certainly a wrong-source / stale-snapshot / swapped-args
         # accident. Refuse unless the user explicitly opts in with
@@ -865,7 +903,7 @@ def _run_backup_for_endpoints(
     # through less so the user can scroll through the deletion list. In --yes
     # mode, dump it once so the run is at least auditable in scrollback / logs.
     if changes is not None:
-        _show_preview(changes, interactive=not args.yes)
+        _show_preview(changes, interactive=not args.yes, unexcluded=unexcluded)
     else:
         _emit_preview(
             _format_first_run_preview(

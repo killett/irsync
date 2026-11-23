@@ -75,7 +75,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-exclude",
         action="store_true",
-        help="Do not apply the default exclude list.",
+        help=(
+            "Do not apply the default exclude list (.Trash-*, .cache, "
+            "unfinished_downloads). Runs rsync even when nothing changed on "
+            "the source, since runs with the excludes never copied those."
+        ),
     )
     parser.add_argument(
         "--allow-unmounted",

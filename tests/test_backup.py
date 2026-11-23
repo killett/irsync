@@ -1,5 +1,6 @@
 """End-to-end orchestration tests for irsync.run_backup."""
 
+import dataclasses
 import json
 import logging
 import os
@@ -101,6 +102,31 @@ class TestFormatPreview:
         lines = _format_preview(changes).splitlines()
         assert "  - evil\\n=== File moves (0) ===" in lines
         assert lines.count("=== File moves (0) ===") == 1
+
+    def test_unexcluded_names_open_the_preview_with_a_note(self):
+        # Behavior: under --no-exclude the preview first says that rsync
+        # also syncs the excluded names, which the lists below do not show.
+        # Bug caught: without the note an unchanged drive shows all zeros
+        # while rsync copies the trash and DELETES stale partial downloads
+        # on the backup.
+        # Expected values: the note's text as written in the 2026-11-23
+        # design doc.
+        lines = _format_preview(
+            Changes(), unexcluded=[".Trash-*", ".cache", "unfinished_downloads"]
+        ).splitlines()
+        assert lines[:5] == [
+            "=== --no-exclude: rsync also syncs .Trash-*, .cache, "
+            "unfinished_downloads ===",
+            "On the backup, rsync makes these match the source, copying and DELETING",
+            "files there. The lists below show only what changed on the source since",
+            "the last backup; --dry-run shows every file rsync will copy or delete.",
+            "=== Directory moves (0) ===",
+        ]
+
+    def test_no_note_without_unexcluded_names(self):
+        # Bug caught: a note printed on every run would teach the user to
+        # skip it, and would be false for a run that keeps the excludes.
+        assert _format_preview(Changes()).startswith("=== Directory moves (0) ===")
 
 
 class TestPreviewNamesSurviveStrictOutput:
@@ -2657,6 +2683,148 @@ class TestDiffCoversOnlyWhatRsyncTransfers:
         ]
         assert (dest / self.TRASH / "a.txt").read_text() == "docs/a.txt"
         assert not (dest / "docs" / "a.txt").exists()
+
+
+class TestNoExcludeReachesRsync:
+    """--no-exclude after runs with the default excludes must reach rsync.
+
+    Those runs never copied the excluded names, so the backup can lack them
+    however unchanged the source is (2026-11-23 design).
+    """
+
+    SKIPPED = (
+        ".Trash-1000/files/old.txt",
+        "Films/.cache/c",
+        "unfinished_downloads/part.bin",
+    )
+    NOTE_HEADER = (
+        "=== --no-exclude: rsync also syncs .Trash-*, .cache, unfinished_downloads ==="
+    )
+
+    @classmethod
+    def _baselined(cls, tmp_path, options):
+        """Back up a tree holding SKIPPED with the default excludes."""
+        src, dest = tmp_path / "src", tmp_path / "dest"
+        for rel in ("Films/a.mkv", *cls.SKIPPED):
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            (src / rel).write_text(rel)
+        dest.mkdir()
+        rc = run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=options,
+            args=_args(),
+        )
+        assert rc == 0
+        assert sorted(tree_signature(dest)) == [SNAPSHOT_FILENAME, "Films/a.mkv"]
+        return src, dest
+
+    @staticmethod
+    def _backup(src, dest, options, **flags):
+        return run_backup(
+            source_arg=str(src),
+            destination_arg=str(dest),
+            options=options,
+            args=_args(**flags),
+        )
+
+    def test_unchanged_source_copies_what_earlier_runs_skipped(
+        self, tmp_path, basic_options, caplog, capsys
+    ):
+        # Behavior: on an unchanged source, --no-exclude still runs rsync,
+        # says why, and copies every excluded file to the backup.
+        # Bug caught: the no-change short-circuit returned first, so the run
+        # logged "backup drive untouched" and copied nothing.
+        # Expected values: the hand-built source tree; every file in it must
+        # now be on the backup, beside the backup's snapshot copy.
+        src, dest = self._baselined(tmp_path, basic_options)
+        capsys.readouterr()
+
+        with caplog.at_level(logging.INFO):
+            rc = self._backup(src, dest, basic_options, no_exclude=True)
+
+        assert rc == 0
+        assert (
+            "No source changes since last backup, but --no-exclude: running "
+            "rsync anyway so the backup gets what the default excludes skip "
+            "(.Trash-*, .cache, unfinished_downloads)."
+        ) in caplog.messages
+        assert sorted(tree_signature(dest)) == sorted(
+            [SNAPSHOT_FILENAME, "Films/a.mkv", *self.SKIPPED]
+        )
+        for rel in self.SKIPPED:
+            assert (dest / rel).read_text() == rel
+        assert self.NOTE_HEADER in capsys.readouterr().out.splitlines()
+
+    def test_unchanged_source_dry_run_lists_what_earlier_runs_skipped(
+        self, tmp_path, basic_options, capsys
+    ):
+        # Behavior: --no-exclude --dry-run on an unchanged source shows
+        # rsync's plan for the excluded files and writes nothing.
+        # Bug caught: the short-circuit stopped the dry run before rsync, so
+        # it printed no file lines; a fix that ran the real rsync here would
+        # change the backup.
+        # Expected values: rsync's itemize code for a new regular file is
+        # ">f+++++++++"; the backup must be byte-identical to before.
+        src, dest = self._baselined(tmp_path, basic_options)
+        before = tree_signature(dest)
+        capsys.readouterr()
+
+        rc = self._backup(src, dest, basic_options, no_exclude=True, dry_run=True)
+
+        assert rc == 0
+        out = capsys.readouterr().out.splitlines()
+        for rel in self.SKIPPED:
+            assert f">f+++++++++ {rel}" in out
+        assert tree_signature(dest) == before
+
+    def test_empty_exclude_list_keeps_the_short_circuit(
+        self, tmp_path, basic_options, caplog
+    ):
+        # Behavior: with no default excludes, --no-exclude changes nothing,
+        # so an unchanged source still leaves the backup drive untouched
+        # (AD-2).
+        # Bug caught: a fix keyed on the flag alone would wake the backup
+        # drive on every --no-exclude run even though no run ever skipped
+        # anything.
+        # Expected values: the existing short-circuit message, verbatim.
+        options = dataclasses.replace(basic_options, exclude_dirs=[])
+        src, dest = tmp_path / "src", tmp_path / "dest"
+        (src / ".Trash-1000").mkdir(parents=True)
+        (src / ".Trash-1000" / "old.txt").write_text("old")
+        dest.mkdir()
+        assert self._backup(src, dest, options) == 0
+        # Nothing is excluded, so the baseline run already copied the trash.
+        assert (dest / ".Trash-1000" / "old.txt").read_text() == "old"
+        caplog.clear()
+
+        with caplog.at_level(logging.INFO):
+            rc = self._backup(src, dest, options, no_exclude=True)
+
+        assert rc == 0
+        assert (
+            "No source changes since last backup; backup drive untouched."
+            in caplog.messages
+        )
+
+    @pytest.mark.parametrize(("no_exclude", "noted"), [(True, True), (False, False)])
+    def test_preview_note_only_under_no_exclude(
+        self, tmp_path, basic_options, capsys, no_exclude, noted
+    ):
+        # Behavior: a run with a real change shows the note under
+        # --no-exclude, and only then.
+        # Bug caught: a note tied to the empty diff would vanish as soon as
+        # anything changed, though rsync still syncs the excluded names; a
+        # note shown without --no-exclude would be false.
+        # Expected values: the design doc's header line.
+        src, dest = self._baselined(tmp_path, basic_options)
+        (src / "Films" / "b.mkv").write_text("new")
+        capsys.readouterr()
+
+        rc = self._backup(src, dest, basic_options, no_exclude=no_exclude)
+
+        assert rc == 0
+        assert (self.NOTE_HEADER in capsys.readouterr().out.splitlines()) is noted
 
 
 class TestCorruptSnapshotRefusesOnlyThatDrive:
