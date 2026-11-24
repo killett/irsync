@@ -2764,8 +2764,9 @@ class TestNoExcludeReachesRsync:
         # Bug caught: the short-circuit stopped the dry run before rsync, so
         # it printed no file lines; a fix that ran the real rsync here would
         # change the backup.
-        # Expected values: rsync's itemize code for a new regular file is
-        # ">f+++++++++"; the backup must be byte-identical to before.
+        # Expected values: rsync itemizes a regular file it would send as
+        # ">f" plus change flags, then the path; the backup must be
+        # byte-identical to before.
         src, dest = self._baselined(tmp_path, basic_options)
         before = tree_signature(dest)
         capsys.readouterr()
@@ -2774,8 +2775,14 @@ class TestNoExcludeReachesRsync:
 
         assert rc == 0
         out = capsys.readouterr().out.splitlines()
-        for rel in self.SKIPPED:
-            assert f">f+++++++++ {rel}" in out
+        # The flags' width differs: rsync 3 writes ">f+++++++++", macOS's
+        # openrsync ">f+++++++".
+        sent = {
+            line.split(maxsplit=1)[1]
+            for line in out
+            if line.startswith(">f") and " " in line
+        }
+        assert set(self.SKIPPED) <= sent, "\n".join(out)
         assert tree_signature(dest) == before
 
     def test_empty_exclude_list_keeps_the_short_circuit(
