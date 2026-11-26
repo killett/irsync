@@ -192,6 +192,37 @@ remote backup nor rename on it. For a remote destination:
 What rsync transfers does not change. This only makes the preview and the
 guard say what happens; the ssh design turns these entries back into moves.
 
+### 4. The pieces and the flow of a run
+
+| Piece | Where | What it does |
+|---|---|---|
+| `Destination` interface | new `destination.py` | `look(paths)` answers, per path, nothing there or type, size and mtime; `replay(dir_moves, file_moves)` renames. |
+| `LocalDestination` | `destination.py` | `look` is an `lstat` under the resolved backup root. A path that runs through a symlinked folder below the root counts as absent, the rule the replay has (AD-9). `replay` is `apply_moves`, unchanged. |
+| Remote destination | none yet | No `Destination` object; section 3 applies. The ssh helper becomes the second implementation. |
+| Row checking | new `baseline.py`, no I/O | Picks the baseline rows to ask about and applies section 1's table to the answers. |
+| Identity check | `diff.py` | Pulled out of `compute_moves` into one shared function, so "same file" has one definition. |
+| `compute_changes` | `diff.py` | Gains a switch to run without move detection (section 3); otherwise untouched. |
+| Orchestrator | `backup.py` | Wires these together. |
+
+A run that has a baseline:
+
+1. Snapshot the source and read the baseline, as today.
+2. Split the baseline into hints (rows under a default-excluded name) and
+   trusted rows (the rest).
+3. Pick the hints to ask about: all of them under `--no-exclude`, the
+   moved-out file candidates in a run with the excludes, none for a remote
+   destination.
+4. Call `look` once with all those paths.
+5. Build "before" from the trusted rows plus the checked hints, and diff.
+6. Guard, preview, prompt, as today.
+7. Replay through the destination, run rsync, persist, as today.
+
+Unchanged: the snapshot format and what is written to it, the replay's own
+checks (no overwrite, the cross-filesystem refusal, the symlink rule), and
+the order of the guards. `look` takes every path in one call so the ssh
+implementation needs one round trip. Steps 2, 3 and 5 are functions on rows
+and are tested without a destination; the one new piece of I/O is `look`.
+
 ## Options considered
 
 1. **Ask the backup.** Chosen. No snapshot change; works on existing
