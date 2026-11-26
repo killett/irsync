@@ -117,6 +117,47 @@ def prune_redundant_dir_moves(
     return kept
 
 
+def same_file(b: NodeInfo, a: NodeInfo) -> bool:
+    """Return True if two records of one inode number describe the same file.
+
+    The one definition of "same file" for move detection: a shared
+    ``(dev, ino)`` alone is not enough, because a kernel that hands a freed
+    inode number to a brand-new file would otherwise look identical to a
+    rename.
+
+    Args:
+        b: The inode's record in the baseline.
+        a: The inode's record in the fresh snapshot.
+
+    Returns:
+        True if size and ``mtime_ns`` match, and ``btime_ns`` too when both
+        records have one.
+    """
+    # The size+mtime_ns gate (H2 from pass 2) catches inode reuse on
+    # filesystems with nanosecond-precision mtime.
+    #
+    # The btime_ns tiebreaker (replacing the broken 5th-pass ctime attempt)
+    # closes the residual NFS hole: on second-granular FSes it's possible for
+    # an unrelated new file to land at the same inode with the same
+    # wall-clock-second mtime AND the same size. btime is set when the inode
+    # is allocated and never changes afterward, so a real rename preserves it
+    # while inode reuse always changes it. btime must match only WHEN both
+    # snapshots have it (>= 0); when either side reports -1 (statx
+    # unavailable, FS without btime support, or legacy snapshot), the
+    # size+mtime gate decides alone.
+    #
+    # mtime_ns == -1 (legacy snapshot pre-H2) still forces a conservative
+    # "not the same file": a safe fallback, rsync re-transfers.
+    both_have_btime = b["btime_ns"] >= 0 and a["btime_ns"] >= 0
+    return not (
+        b["mtime_ns"] == -1
+        or a["mtime_ns"] == -1
+        or b["size"] != a["size"]
+        or b["mtime_ns"] != a["mtime_ns"]
+        or (both_have_btime and b["btime_ns"] != a["btime_ns"])
+    )
+
+
 def compute_moves(
     before: dict[tuple[int, int], NodeInfo],
     after: dict[tuple[int, int], NodeInfo],
@@ -178,33 +219,8 @@ def compute_moves(
         if len(bpaths) == 1 and len(apaths) == 1:
             (old_path,) = tuple(bpaths)
             (new_path,) = tuple(apaths)
-            # Defend against inode reuse: a kernel that hands out a freed
-            # inode number to a brand-new file would otherwise look identical
-            # to a rename. The size+mtime_ns gate (H2 from pass 2) catches
-            # this on filesystems with nanosecond-precision mtime.
-            #
-            # The btime_ns tiebreaker (replacing the broken 5th-pass ctime
-            # attempt) closes the residual NFS hole: on second-granular FSes
-            # it's possible for an unrelated new file to land at the same
-            # inode with the same wall-clock-second mtime AND the same size.
-            # btime is set when the inode is allocated and never changes
-            # afterward, so a real rename preserves it while inode reuse
-            # always changes it. We only require btime to match WHEN both
-            # snapshots have it (>= 0); when either side reports -1 (statx
-            # unavailable, FS without btime support, or legacy snapshot),
-            # we fall back to the original size+mtime gate alone.
-            #
-            # mtime_ns == -1 sentinel (legacy snapshot pre-H2) still forces
-            # a conservative refuse-the-move — safe fallback, rsync re-
-            # transfers.
-            both_have_btime = b["btime_ns"] >= 0 and a["btime_ns"] >= 0
-            if (
-                b["mtime_ns"] == -1
-                or a["mtime_ns"] == -1
-                or b["size"] != a["size"]
-                or b["mtime_ns"] != a["mtime_ns"]
-                or (both_have_btime and b["btime_ns"] != a["btime_ns"])
-            ):
+            # Defend against inode reuse (see same_file).
+            if not same_file(b, a):
                 logging.debug(
                     "Inode %s path changed but size/mtime differ "
                     "(possible inode reuse); not treating as a move: %s -> %s",
@@ -336,6 +352,7 @@ def compute_changes(
     *,
     skip_hardlinks: bool = True,
     include_symlinks: bool = False,
+    detect_moves: bool = True,
 ) -> Changes:
     """High-level diff: produce moves, prune redundant dir moves, and list created/deleted.
 
@@ -344,6 +361,9 @@ def compute_changes(
         after_rows: Snapshot rows from the current run.
         skip_hardlinks: Forwarded to :func:`compute_moves`.
         include_symlinks: Forwarded to :func:`compute_moves`.
+        detect_moves: If False, report no moves: an entry whose path changed
+            is listed as deleted at its old path and created at its new one,
+            which is what rsync does where a move cannot be replayed.
 
     Returns:
         A :class:`Changes` aggregate ready for the orchestrator to act on.
@@ -351,11 +371,18 @@ def compute_changes(
     before = index_by_inode(before_rows)
     after = index_by_inode(after_rows)
 
-    dir_moves, file_moves, consumed_keys = compute_moves(
-        before, after, skip_hardlinks=skip_hardlinks, include_symlinks=include_symlinks
-    )
-    dir_moves = prune_redundant_dir_moves(dir_moves)
-    file_moves = _suppress_file_moves_covered_by_dirs(dir_moves, file_moves)
+    dir_moves: list[tuple[str, str]] = []
+    file_moves: list[tuple[str, str]] = []
+    consumed_keys: set[tuple[int, int]] = set()
+    if detect_moves:
+        dir_moves, file_moves, consumed_keys = compute_moves(
+            before,
+            after,
+            skip_hardlinks=skip_hardlinks,
+            include_symlinks=include_symlinks,
+        )
+        dir_moves = prune_redundant_dir_moves(dir_moves)
+        file_moves = _suppress_file_moves_covered_by_dirs(dir_moves, file_moves)
 
     before_keys = set(before.keys())
     after_keys = set(after.keys())

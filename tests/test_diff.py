@@ -11,6 +11,7 @@ from irsync.diff import (
     make_parent_substituter,
     plan_directory_moves,
     prune_redundant_dir_moves,
+    same_file,
 )
 
 
@@ -708,4 +709,107 @@ class TestComputeChanges:
             f"replaced symlink must surface as modified or deleted+created; "
             f"got modified={changes.modified!r}, deleted={changes.deleted!r}, "
             f"created={changes.created!r}"
+        )
+
+
+class TestSameFile:
+    @staticmethod
+    def _info(**overrides):
+        row = _row(**{"ino": 1, "path": "p", "size": 10, **overrides})
+        return index_by_inode([row])[(1, 1)]
+
+    @pytest.mark.parametrize(
+        ("before", "after", "expected"),
+        [
+            ({}, {}, True),
+            ({}, {"size": 11}, False),
+            ({}, {"mtime_ns": 1_000_000_001}, False),
+            ({}, {"btime_ns": 2_000_000_000}, False),
+            ({"btime_ns": -1}, {"btime_ns": 2_000_000_000}, True),
+            ({}, {"btime_ns": -1}, True),
+            ({"mtime_ns": -1}, {"mtime_ns": -1}, False),
+            ({}, {"mtime_ns": -1}, False),
+        ],
+        ids=[
+            "identical",
+            "size-differs",
+            "mtime-one-ns-apart",
+            "btime-differs",
+            "baseline-has-no-btime",
+            "source-has-no-btime",
+            "neither-has-an-mtime",
+            "source-has-no-mtime",
+        ],
+    )
+    def test_identity_needs_size_mtime_and_btime_when_known(
+        self, before, after, expected
+    ):
+        # Behavior: two records of one inode number are the same file when
+        # size and mtime_ns match, and btime_ns too when both have one.
+        # Bug caught: dropping any clause would call a reused inode number
+        # a rename, and the replay would then move the wrong file's backup
+        # copy to the new file's path.
+        # Expected values: AD-3 and AD-13, read by hand: -1 means "not
+        # recorded"; an unrecorded mtime is never trusted, an unrecorded
+        # btime only switches the tiebreaker off.
+        assert same_file(self._info(**before), self._info(**after)) is expected
+
+
+class TestComputeChangesWithoutMoveDetection:
+    def test_a_renamed_file_is_deleted_and_created(self):
+        # Behavior: with move detection off, a path change is a deletion
+        # at the old path and a creation at the new one.
+        # Bug caught: a switch that only hid the move lists would leave the
+        # renamed file out of every list, and the run could stop at "no
+        # source changes" without backing it up.
+        before = [_row(ino=10, path="old.txt")]
+        after = [_row(ino=10, path="new.txt")]
+
+        changes = compute_changes(before, after, detect_moves=False)
+
+        assert changes == Changes(deleted=["old.txt"], created=["new.txt"])
+
+    def test_a_renamed_folder_lists_every_entry_in_it(self):
+        # Behavior: a renamed folder appears entry by entry, the folder
+        # itself included, since each is deleted and sent again where the
+        # move cannot be replayed.
+        # Bug caught: listing only the folder would under-count the
+        # deletions the >50% guard is there to see.
+        # Expected values: hand count, 3 entries each way.
+        before = [
+            _row(ino=1, path="big", type="d"),
+            _row(ino=2, path="big/f1"),
+            _row(ino=3, path="big/sub/f2"),
+        ]
+        after = [
+            _row(ino=1, path="big2", type="d"),
+            _row(ino=2, path="big2/f1"),
+            _row(ino=3, path="big2/sub/f2"),
+        ]
+
+        changes = compute_changes(before, after, detect_moves=False)
+
+        assert changes == Changes(
+            deleted=["big", "big/f1", "big/sub/f2"],
+            created=["big2", "big2/f1", "big2/sub/f2"],
+        )
+
+    def test_an_edit_in_place_is_still_modified(self):
+        # Bug caught: skipping the whole shared-inode pass along with move
+        # detection would lose in-place edits.
+        before = [_row(ino=10, path="a.txt", size=1)]
+        after = [_row(ino=10, path="a.txt", size=2)]
+
+        changes = compute_changes(before, after, detect_moves=False)
+
+        assert changes == Changes(modified=["a.txt"])
+
+    def test_move_detection_stays_on_by_default(self):
+        # Bug caught: a default of "off" would silently turn every backup's
+        # renames into delete and re-send.
+        before = [_row(ino=10, path="old.txt")]
+        after = [_row(ino=10, path="new.txt")]
+
+        assert compute_changes(before, after) == Changes(
+            file_moves=[("old.txt", "new.txt")]
         )
