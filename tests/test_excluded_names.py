@@ -383,6 +383,33 @@ class TestRunWithTheExcludes:
         assert inode_for(dest / "finished" / "ep.mkv") == copy_inode
         assert not (dest / DL / "ep.mkv").exists()
 
+    def test_a_hard_link_out_of_an_excluded_folder_is_not_a_move(
+        self, tmp_path, basic_options, caplog
+    ):
+        # Behavior (design section 5): a file given a second name in the
+        # synced tree while keeping its first under the excluded name is
+        # created there, and the backup's copy under the excluded name is
+        # left where it is, since the source still has that path.
+        # Bug caught: counting the inode's paths only in the synced part of
+        # the source listed "File moves (1)", and the replay renamed the
+        # backup's copy out of the excluded folder (the final review's C1).
+        # Expected values: hand count, as on main. Created: finished/ep.mkv.
+        # The copy keeps its inode and its place, which no rename would.
+        src, dest = _tree(tmp_path, f"{DL}/ep.mkv", "finished/other.txt", "keep")
+        assert _backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
+        copy_inode = inode_for(dest / DL / "ep.mkv")
+        os.link(src / DL / "ep.mkv", src / "finished" / "ep.mkv")
+
+        rc, diffs = _backup(src, dest, basic_options, caplog)
+
+        assert rc == 0
+        assert diffs == [
+            "Diff: 0 dir moves, 0 file moves, 0 modified, 1 created, 0 deleted."
+        ]
+        assert inode_for(dest / DL / "ep.mkv") == copy_inode
+        assert (dest / DL / "ep.mkv").read_text() == f"{DL}/ep.mkv"
+        assert (dest / "finished" / "ep.mkv").read_text() == f"{DL}/ep.mkv"
+
     def test_a_stale_copy_is_left_alone_and_the_file_is_sent(
         self, tmp_path, basic_options, caplog
     ):

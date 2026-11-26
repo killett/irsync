@@ -227,45 +227,83 @@ class TestMovedOutCandidates:
         # Bug caught: no candidates at all would copy a file the backup
         # already holds (the reproduced case 3).
         trusted = [_row(ino=1, path="docs/a.txt")]
+        source = [_row(ino=1, path="docs/a.txt"), self.MOVED]
 
-        assert moved_out_candidates([self.HINT], trusted, [self.MOVED]) == [self.HINT]
+        assert moved_out_candidates(
+            [self.HINT], trusted, [self.MOVED], source=source
+        ) == [self.HINT]
 
     @pytest.mark.parametrize(
-        ("hints", "trusted", "after"),
+        ("hints", "trusted", "after", "source"),
         [
-            ([HINT], [], [_row(ino=7, path="finished/ep.mkv", size=11)]),
-            ([HINT], [], [_row(ino=7, path="finished/ep.mkv", mtime_ns=_T + 1)]),
-            ([HINT], [_row(ino=7, path="docs/link.mkv")], [MOVED]),
-            ([HINT], [], [MOVED, _row(ino=7, path="finished/link.mkv")]),
+            (
+                [HINT],
+                [],
+                [_row(ino=7, path="finished/ep.mkv", size=11)],
+                [_row(ino=7, path="finished/ep.mkv", size=11)],
+            ),
+            (
+                [HINT],
+                [],
+                [_row(ino=7, path="finished/ep.mkv", mtime_ns=_T + 1)],
+                [_row(ino=7, path="finished/ep.mkv", mtime_ns=_T + 1)],
+            ),
+            ([HINT], [_row(ino=7, path="docs/link.mkv")], [MOVED], [MOVED]),
+            (
+                [HINT],
+                [],
+                [MOVED, _row(ino=7, path="finished/link.mkv")],
+                [MOVED, _row(ino=7, path="finished/link.mkv")],
+            ),
+            # The hint's own path is still on the source, as a second link
+            # to the same inode; rsync does not sync it in this run.
+            ([HINT], [], [MOVED], [MOVED, HINT]),
             (
                 [_row(ino=7, path="unfinished_downloads/Pack", type="d")],
                 [],
                 [_row(ino=7, path="finished/Pack", type="d")],
+                [_row(ino=7, path="finished/Pack", type="d")],
             ),
-            ([HINT], [], [_row(ino=7, path="finished/ep.mkv", type="l")]),
-            ([HINT], [], [_row(ino=8, path="finished/other.mkv")]),
-            ([HINT], [], []),
+            (
+                [HINT],
+                [],
+                [_row(ino=7, path="finished/ep.mkv", type="l")],
+                [_row(ino=7, path="finished/ep.mkv", type="l")],
+            ),
+            (
+                [HINT],
+                [],
+                [_row(ino=8, path="finished/other.mkv")],
+                [_row(ino=8, path="finished/other.mkv")],
+            ),
+            ([HINT], [], [], []),
         ],
         ids=[
             "size-changed",
             "mtime-changed",
             "hard-link-in-the-baseline",
             "hard-link-on-the-source",
+            "hard-link-left-under-the-excluded-name",
             "a-folder",
             "no-longer-a-regular-file",
             "another-inode",
             "gone-from-the-synced-tree",
         ],
     )
-    def test_anything_else_does_not(self, hints, trusted, after):
+    def test_anything_else_does_not(self, hints, trusted, after, source):
         # Behavior: a hint qualifies only when it is certain to become a
-        # file move.
+        # file move, and the move takes nothing from the source's paths.
         # Bug caught: a hint admitted without that certainty is left over
         # by the diff and listed as deleted under an excluded name, in a
-        # run that deletes nothing there.
+        # run that deletes nothing there; one whose inode keeps its old
+        # path on the source (counted in the synced rows only) is replayed
+        # as a rename that takes the backup's copy from a path the source
+        # still has.
         # Expected values: each case breaks exactly one condition named in
-        # the design's section 2.
-        assert moved_out_candidates(hints, trusted, after) == []
+        # the design's sections 2 and 5 ("A hint whose inode has several
+        # paths (hard links) is ... never a candidate in a run with the
+        # excludes").
+        assert moved_out_candidates(hints, trusted, after, source=source) == []
 
     def test_admitting_only_candidates_lists_nothing_under_an_excluded_name(self):
         # Behavior (design section 2): in a run with the excludes no path
@@ -287,8 +325,12 @@ class TestMovedOutCandidates:
             _row(ino=10, path="docs/same.mkv"),
             _row(ino=11, path="docs/edited.mkv", size=99),
         ]
+        source = [
+            *after,
+            _row(ino=13, path="unfinished_downloads/growing.part", size=20),
+        ]
 
-        candidates = moved_out_candidates(hints, trusted, after)
+        candidates = moved_out_candidates(hints, trusted, after, source=source)
         changes = compute_changes(trusted + candidates, after)
 
         assert changes.file_moves == [

@@ -110,7 +110,11 @@ def checked_rows(hints: Iterable[Row], seen: Mapping[str, Seen | None]) -> list[
 
 
 def moved_out_candidates(
-    hints: Iterable[Row], trusted: Iterable[Row], after: Iterable[Row]
+    hints: Iterable[Row],
+    trusted: Iterable[Row],
+    after: Iterable[Row],
+    *,
+    source: Iterable[Row],
 ) -> list[Row]:
     """Pick the hints that can become a file move in a run with the excludes.
 
@@ -118,16 +122,22 @@ def moved_out_candidates(
     only thing irsync can do there is take a file out. A hint qualifies when
     it is certain to become a move if the destination holds it: a regular
     file whose inode has exactly one path in the baseline (the hint's) and
-    exactly one in ``after``, where it is still a regular file and the same
-    file (:func:`~irsync.diff.same_file`). Anything else under an excluded
-    name stays out of the diff, so no path there can be listed as modified,
-    created, or deleted.
+    exactly one path on the source, that one in ``after``, where it is still
+    a regular file and the same file (:func:`~irsync.diff.same_file`). A
+    hard link left under the excluded name disqualifies it, since renaming
+    the backup's copy would take it from a path the source still has.
+    Anything else under an excluded name stays out of the diff, so no path
+    there can be listed as modified, created, or deleted.
 
     Args:
         hints: Baseline rows under a default-excluded name.
         trusted: The other baseline rows.
         after: The fresh rows rsync will sync; none is under an excluded
             name.
+        source: Every fresh row, excluded names included. An inode with
+            more than one path here is hard-linked on the source and never
+            a candidate. Paths are counted, not ``nlink``: a second link
+            outside the source tree does not stop a move.
 
     Returns:
         The qualifying hints, in the hints' order.
@@ -140,6 +150,7 @@ def moved_out_candidates(
     before = index_by_inode(
         r for r in (*trusted, *hints) if (r["dev"], r["ino"]) in now
     )
+    on_source = index_by_inode(r for r in source if (r["dev"], r["ino"]) in now)
     out: list[Row] = []
     for h in hints:
         key = (h["dev"], h["ino"])
@@ -147,6 +158,11 @@ def moved_out_candidates(
         if a is None or h["type"] != "f" or a["type"] != "f":
             continue
         b = before[key]
-        if b["paths"] == {h["path"]} and len(a["paths"]) == 1 and same_file(b, a):
+        if (
+            b["paths"] == {h["path"]}
+            and len(a["paths"]) == 1
+            and len(on_source[key]["paths"]) == 1
+            and same_file(b, a)
+        ):
             out.append(h)
     return out

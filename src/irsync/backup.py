@@ -538,7 +538,7 @@ def _plan_changes(
         seen = destination.look([r["path"] for r in hints]) if hints else {}
         before = trusted + checked_rows(hints, seen)
     else:
-        candidates = moved_out_candidates(hints, trusted, after)
+        candidates = moved_out_candidates(hints, trusted, after, source=fresh_rows)
         seen = destination.look([r["path"] for r in candidates]) if candidates else {}
         before = trusted + [r for r in candidates if holds(r, seen[r["path"]])]
     return compute_changes(before, after), before, (0, 0)
