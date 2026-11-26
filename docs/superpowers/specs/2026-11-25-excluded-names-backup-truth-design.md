@@ -223,6 +223,36 @@ the order of the guards. `look` takes every path in one call so the ssh
 implementation needs one round trip. Steps 2, 3 and 5 are functions on rows
 and are tested without a destination; the one new piece of I/O is `look`.
 
+### 5. When the lookup cannot answer, and edge cases
+
+- Nothing at the path, or a parent that is not a folder: absent. Not an
+  error. A destination root that does not exist yet makes everything
+  absent.
+- Any other error from `look` (permission denied, an I/O error): the run is
+  refused with a message naming the path and exits 2 (`EXIT_REFUSED`).
+  Nothing has been written to the destination at that point. An `ALL` run
+  counts it as that drive's error and carries on. Refused rather than
+  treated as absent: absent would list files as created on the strength of
+  an error, and a backup that cannot be read should be known before rsync
+  runs.
+- Wrong type on the destination (a folder where the row says file, or the
+  reverse): the row is kept with the destination's type, so the diff
+  reports the path as deleted and created and rsync replaces it. In a run
+  with the excludes such a candidate is simply dropped.
+- Symlinks and special files are checked by type only.
+- A hint whose inode has several paths (hard links) is never a move, as
+  today, and never a candidate in a run with the excludes.
+- The destination changes between the lookup and the replay: the replay's
+  own checks still apply (a missing file is skipped, nothing is
+  overwritten), and rsync puts it right.
+- `--dry-run` does the lookups, which only read, so its preview matches a
+  real run's.
+- Old baselines work as they are: the snapshot format does not change.
+- A FAT destination (2-second timestamps): rsync already re-sends files
+  there on every run unless `--modify-window` is used, which irsync does
+  not pass. irsync follows rsync's test, so it finds no moves out of
+  excluded names there and makes nothing worse.
+
 ## Options considered
 
 1. **Ask the backup.** Chosen. No snapshot change; works on existing
