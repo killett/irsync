@@ -4,7 +4,7 @@
     {
       "id": 1,
       "subject": "Task 1: One identity check; a diff without moves",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `diff.same_file` is the one definition of \"same file\", and `compute_changes(detect_moves=False)` reports a path change as deleted and created.\n\n**Files:**\n- Modify: `src/irsync/diff.py` (new `same_file`; `compute_moves`; `compute_changes`)\n- Test: `tests/test_diff.py` (the import list; two classes appended at the end)\n\n**Acceptance Criteria:**\n- [ ] `same_file(b, a)` is True only when size and `mtime_ns` match, neither `mtime_ns` is -1, and `btime_ns` matches when both are >= 0.\n- [ ] `compute_moves` calls `same_file` and holds no second copy of that condition.\n- [ ] `compute_changes(before, after, detect_moves=False)` returns no moves: a renamed file is in `deleted` and `created`, a renamed folder contributes every entry in it, and an in-place edit is still in `modified`.\n- [ ] `compute_changes` called without `detect_moves` behaves as before: every test that existed before this task passes unmodified.\n- [ ] `pixi run test -q` ends with `443 passed, 1 skipped`.\n\n**Verify:** `pixi run test tests/test_diff.py -q` → no failures; then `pixi run test -q` → `443 passed, 1 skipped`\n\n```json:metadata\n{\"files\": [\"src/irsync/diff.py\", \"tests/test_diff.py\"], \"verifyCommand\": \"pixi run test tests/test_diff.py -q && pixi run test -q\", \"acceptanceCriteria\": [\"same_file(b, a) is True only when size and mtime_ns match, neither mtime_ns is -1, and btime_ns matches when both are >= 0\", \"compute_moves calls same_file and holds no second copy of that condition\", \"compute_changes(before, after, detect_moves=False) returns no moves: a renamed file is in deleted and created, a renamed folder contributes every entry in it, an in-place edit is still in modified\", \"compute_changes without detect_moves behaves as before: every test that existed before this task passes unmodified\", \"pixi run test -q ends with 443 passed, 1 skipped\"], \"modelTier\": \"standard\"}\n```"
     },
     {
@@ -60,5 +60,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-11-25"
+  "lastUpdated": "2026-11-26T07:11:53Z"
 }
