@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from irsync.backup import EXIT_REFUSED, run_backup
-from irsync.destination import LocalDestination
+from irsync.destination import DestinationUnreadable, LocalDestination
 from irsync.snapshot import SNAPSHOT_FILENAME
 
 from .conftest import cli_args as _args
@@ -124,7 +124,9 @@ class TestNoExcludeRun:
         # name would let rsync delete 8 of the backup's 15 entries with the
         # guard silent and the deletions unlisted.
         # Expected values: 8 of 15 rows (the root, docs and its 3 files,
-        # the folder and its 9 parts) is 53%.
+        # the folder and its 9 parts) is 53%. A local refusal ends as it
+        # always has: the sentence a remote destination adds (AD-37) is
+        # not in it.
         parts = [f"{DL}/part{i}" for i in range(1, 10)]
         src, dest = _tree(tmp_path, *parts, "docs/real1", "docs/real2", "docs/real3")
         assert _backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
@@ -134,9 +136,11 @@ class TestNoExcludeRun:
         rc, _diffs = _backup(src, dest, basic_options, caplog, no_exclude=True)
 
         assert rc == EXIT_REFUSED
-        assert any(
-            "would delete 8 of 15 previously-recorded entries (53%)" in m
-            for m in caplog.messages
+        refusals = [m for m in caplog.messages if m.startswith("Refusing:")]
+        assert len(refusals) == 1
+        assert "would delete 8 of 15 previously-recorded entries (53%)" in refusals[0]
+        assert refusals[0].endswith(
+            "args were reversed. Pass --allow-massive-delete to override."
         )
         assert (dest / parts[0]).is_file()
 
@@ -199,6 +203,45 @@ class TestNoExcludeRun:
         assert inode_for(dest / "finished" / "ep.mkv") == copy_inode
         assert not (dest / DL / "ep.mkv").exists()
 
+    def test_a_dry_run_asks_the_backup_too(
+        self, tmp_path, basic_options, caplog, monkeypatch
+    ):
+        # Behavior (design section 5): --dry-run does the lookups, which
+        # only read, so its preview is the one a real run would show.
+        # Bug caught: skipping the lookups under --dry-run would leave the
+        # hints unchecked: dropped, the moved file is listed as created;
+        # kept on trust, a stale copy would be listed as a move. Either
+        # way the dry run's preview is not the real run's.
+        # Expected values: every row under the excluded name asked about
+        # once; the diff the real run gives in the test above; the backup
+        # and the baseline byte for byte as they were.
+        src, dest = _tree(tmp_path, f"{DL}/ep.mkv", "finished/other.txt", "keep")
+        assert _backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
+        (src / DL / "ep.mkv").rename(src / "finished" / "ep.mkv")
+        backup_before = tree_signature(dest)
+        baseline_before = (src / SNAPSHOT_FILENAME).read_bytes()
+        looked: list[list[str]] = []
+        real_look = LocalDestination.look
+
+        def recording_look(self, paths):
+            paths = list(paths)
+            looked.append(sorted(paths))
+            return real_look(self, paths)
+
+        monkeypatch.setattr(LocalDestination, "look", recording_look)
+
+        rc, diffs = _backup(
+            src, dest, basic_options, caplog, no_exclude=True, dry_run=True
+        )
+
+        assert rc == 0
+        assert looked == [[DL, f"{DL}/ep.mkv"]]
+        assert diffs == [
+            "Diff: 0 dir moves, 1 file moves, 0 modified, 0 created, 0 deleted."
+        ]
+        assert tree_signature(dest) == backup_before
+        assert (src / SNAPSHOT_FILENAME).read_bytes() == baseline_before
+
     def test_a_folder_moved_out_is_a_directory_move_with_its_files_checked(
         self, tmp_path, basic_options, caplog
     ):
@@ -249,7 +292,9 @@ class TestNoExcludeRun:
         # nanoseconds differ and re-sends it when a second apart (design
         # doc, Decisions). A copy that was renamed and then left alone
         # keeps its inode: had rsync re-sent it, the new file would have
-        # been written while the renamed one still held that number.
+        # been written while the renamed one still held that number. In
+        # both cases nothing is left at the old path: the copy is renamed
+        # away, or deleted by rsync as the preview lists it.
         mtime = 1_700_000_000 * 10**9 + 500_000_000
         src, dest = _tree(tmp_path, f"{DL}/ep.mkv", "finished/other.txt", "keep")
         os.utime(src / DL / "ep.mkv", ns=(mtime, mtime))
@@ -271,6 +316,7 @@ class TestNoExcludeRun:
         if moved:
             assert inode_for(dest / "finished" / "ep.mkv") == copy_inode
         assert (dest / "finished" / "ep.mkv").read_text() == f"{DL}/ep.mkv"
+        assert not (dest / DL / "ep.mkv").exists()
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
     def test_a_backup_that_cannot_be_read_refuses_the_run(
@@ -530,3 +576,88 @@ class TestRunWithTheExcludes:
             "No source changes since last backup; backup drive untouched."
             in caplog.messages
         ) is (change != "elsewhere")
+
+
+@pytest.mark.parametrize("no_exclude", [False, True], ids=["excludes", "no-exclude"])
+class TestEitherKindOfLocalRun:
+    """What a run with the excludes and a ``--no-exclude`` run share."""
+
+    def test_the_guard_counts_only_rows_the_backup_holds(
+        self, tmp_path, basic_options, caplog, no_exclude
+    ):
+        # Behavior (design section 1): the >50% guard counts deletions
+        # against a "before" that holds only rows the backup has.
+        # Bug caught: dividing by the whole baseline let six partial
+        # downloads the backup never received dilute the guard to 3 of 12
+        # (25%), and rsync deleted every real file in docs unrefused.
+        # Expected values: hand count. The backup holds the root, docs and
+        # its 3 files (5 rows); deleting the 3 files is 3 of 5, 60%. The
+        # message is the local refusal, word for word.
+        parts = [f"{DL}/part{i}" for i in range(1, 7)]
+        docs = ["docs/real1", "docs/real2", "docs/real3"]
+        src, dest = _tree(tmp_path, *parts, *docs)
+        assert _backup(src, dest, basic_options, caplog)[0] == 0
+        assert not (dest / DL).exists()
+        for rel in docs:
+            (src / rel).unlink()
+
+        rc, _diffs = _backup(src, dest, basic_options, caplog, no_exclude=no_exclude)
+
+        assert rc == EXIT_REFUSED
+        assert [m for m in caplog.messages if m.startswith("Refusing:")] == [
+            "Refusing: diff would delete 3 of 5 previously-recorded entries (60%). "
+            "This usually means the source tree has been swapped, the snapshot is "
+            "from a different tree, or args were reversed. Pass "
+            "--allow-massive-delete to override."
+        ]
+        assert sorted(p.name for p in (dest / "docs").iterdir()) == [
+            "real1",
+            "real2",
+            "real3",
+        ]
+
+    def test_a_lookup_error_refuses_the_run_before_anything_is_written(
+        self, tmp_path, basic_options, caplog, monkeypatch, no_exclude
+    ):
+        # Behavior (design section 5): when the backup cannot be read, the
+        # run is refused with exit 2 before the replay or rsync, whatever
+        # the uid.
+        # Bug caught: catching the error on one kind of run only, or
+        # reading it as "nothing there", would list the moved file as
+        # created and hand the run to rsync. The chmod test above skips
+        # under root and covers only --no-exclude.
+        # Expected values: the paths each kind of run asks about (every
+        # row under the excluded name, or the one file moved out); the
+        # refusal naming the path and the reason the stand-in raises;
+        # rsync never started; the backup and the baseline byte for byte
+        # as they were.
+        src, dest = _tree(tmp_path, f"{DL}/ep.mkv", "finished/other.txt", "keep")
+        assert _backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
+        (src / DL / "ep.mkv").rename(src / "finished" / "ep.mkv")
+        backup_before = tree_signature(dest)
+        baseline_before = (src / SNAPSHOT_FILENAME).read_bytes()
+        unreadable = str(dest / DL / "ep.mkv")
+        looked: list[list[str]] = []
+
+        def failing_look(self, paths):
+            looked.append(sorted(paths))
+            raise DestinationUnreadable(unreadable, "Input/output error")
+
+        monkeypatch.setattr(LocalDestination, "look", failing_look)
+        rsync_runs: list[list[str]] = []
+        monkeypatch.setattr(
+            "irsync.backup.run_real_sync", lambda cmd: rsync_runs.append(cmd) or 0
+        )
+
+        rc, _diffs = _backup(src, dest, basic_options, caplog, no_exclude=no_exclude)
+
+        assert rc == EXIT_REFUSED
+        assert looked == [[DL, f"{DL}/ep.mkv"] if no_exclude else [f"{DL}/ep.mkv"]]
+        assert [m for m in caplog.messages if m.startswith("Refusing:")] == [
+            f"Refusing: cannot read the backup at {unreadable} (Input/output "
+            "error). irsync checks what the backup holds there before it lists "
+            "any change; nothing has been written to it."
+        ]
+        assert rsync_runs == []
+        assert tree_signature(dest) == backup_before
+        assert (src / SNAPSHOT_FILENAME).read_bytes() == baseline_before

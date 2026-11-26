@@ -914,8 +914,9 @@ def _run_backup_for_endpoints(
     else:
         logging.info("No prior snapshot; treating as first backup.")
 
-    # rsync's excludes, as a predicate: what the diff covers and, on a first
-    # backup, which destination names a real run leaves alone.
+    # rsync's excludes, as a predicate: on a first backup, which destination
+    # names a real run leaves alone. (What the diff covers is decided in
+    # _plan_changes, from the same flags.)
     excluded = exclude_matcher([] if args.no_exclude else options.exclude_dirs)
     # What --no-exclude adds back. Runs with the default excludes never
     # copied these, so the backup can lack them however unchanged the source
@@ -930,10 +931,11 @@ def _run_backup_for_endpoints(
         # Diff only what rsync transfers. A move into an excluded directory,
         # such as a file sent to the desktop trash, is then a deletion from
         # the backup instead of a move replayed where --delete-before never
-        # reaches it. Under an excluded name the backup is asked what it
-        # holds (AD-36). before_rows becomes the rows the diff was computed
-        # against, so the >50% guard below counts deletions against the
-        # same tree.
+        # reaches it. Under an excluded name a local backup is asked what it
+        # holds (AD-36); a remote one can be neither asked nor renamed on,
+        # so the lists leave those names out and claim no moves (AD-37).
+        # before_rows becomes the rows the diff was computed against, so the
+        # >50% guard below counts deletions against the same tree.
         try:
             changes, before_rows, unreplayed = _plan_changes(
                 before_rows,

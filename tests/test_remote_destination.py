@@ -134,6 +134,39 @@ class TestRemoteDestinationClaimsNoMoves:
         assert rc == 0
         assert _user_files(dest) == _user_files(src)
 
+    def test_the_guard_counts_only_rows_the_backup_holds(
+        self, tmp_path, basic_options, caplog, remote_host
+    ):
+        # Behavior (design section 1): the >50% guard counts deletions
+        # against a "before" that holds only rows the backup has; here,
+        # the rows outside the excluded names, which the lists cover.
+        # Bug caught: dividing by the whole baseline let six partial
+        # downloads the remote backup never received dilute the guard to 3
+        # of 12 (25%), and rsync deleted every real file in docs unrefused.
+        # Expected values: hand count. The backup holds the root, docs and
+        # its 3 files (5 rows); deleting the 3 files is 3 of 5, 60%. No
+        # move is involved, so the refusal has no remote sentence.
+        parts = [f"unfinished_downloads/part{i}" for i in range(1, 7)]
+        docs = ["docs/real1", "docs/real2", "docs/real3"]
+        src, dest = _tree(tmp_path, *parts, *docs)
+        assert _backup(src, dest, remote_host, basic_options, caplog)[0] == 0
+        assert not (dest / "unfinished_downloads").exists()
+        before = _user_files(dest)
+        for rel in docs:
+            (src / rel).unlink()
+
+        rc, _diffs = _backup(src, dest, remote_host, basic_options, caplog)
+
+        assert rc == EXIT_REFUSED
+        assert [m for m in caplog.messages if m.startswith("Refusing:")] == [
+            "Refusing: diff would delete 3 of 5 previously-recorded entries (60%). "
+            "This usually means the source tree has been swapped, the snapshot is "
+            "from a different tree, or args were reversed. Pass "
+            "--allow-massive-delete to override."
+        ]
+        assert _user_files(dest) == before
+        assert sorted(before) == docs
+
     def test_no_exclude_leaves_the_excluded_names_out_of_the_lists(
         self, tmp_path, basic_options, caplog, capsys, remote_host
     ):
