@@ -161,6 +161,37 @@ other than irsync changes the backup, the lists can still be wrong there;
 rsync still makes the backup right, and the replay still skips a missing
 file (AD-9).
 
+### 3. A remote destination claims no moves
+
+Until the ssh helper exists (the next design), irsync can neither look at a
+remote backup nor rename on it. For a remote destination:
+
+- The diff is computed without move detection. Anything moved or renamed is
+  reported as deleted (old path) and created (new path), entry by entry,
+  which is what rsync does there: a renamed folder of 12 files is 13
+  deletions and 13 creations.
+- When the diff with move detection would have held moves, a note opens the
+  preview and the log gets a warning:
+
+  ```
+  === Remote destination: 1 directory move and 1 file move cannot be replayed ===
+  They are listed below as deleted and created: rsync deletes them on the
+  backup and sends them again.
+  ```
+
+- The >50% guard (AD-6) counts them, since they are deletions on the backup.
+  A behaviour change: a large rename to a remote destination is refused
+  until `--allow-massive-delete` is passed, under `--yes` too. The refusal
+  says that a rename counts on a remote destination.
+- Excluded names are never checked. A run with the default excludes is as
+  today. A `--no-exclude` run leaves those names out of the lists on both
+  sides and keeps today's note (AD-35), which points to `--dry-run` for
+  every file.
+- The help text and README say the replay needs a local destination.
+
+What rsync transfers does not change. This only makes the preview and the
+guard say what happens; the ssh design turns these entries back into moves.
+
 ## Options considered
 
 1. **Ask the backup.** Chosen. No snapshot change; works on existing
