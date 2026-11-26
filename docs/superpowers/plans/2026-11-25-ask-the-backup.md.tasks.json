@@ -10,7 +10,7 @@
     {
       "id": 2,
       "subject": "Task 2: The destination interface, local implementation",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `irsync.destination` offers `Destination`, `LocalDestination`, `Seen` and `DestinationUnreadable`: a local backup can be asked what it holds at a list of paths, and renamed on.\n\n**Files:**\n- Create: `src/irsync/destination.py`\n- Create: `tests/test_destination.py`\n\n**Acceptance Criteria:**\n- [ ] `LocalDestination(root).look(paths)` returns one entry per distinct path: `Seen(type, size, mtime_ns)` taken by `lstat`, or `None`.\n- [ ] A path is absent (`None`) when nothing is there, when a parent is missing or is not a directory, when the root does not exist, or when a parent below the root is a symlink (never followed). A symlink on the way to the root is followed.\n- [ ] An `lstat` failure other than absence raises `DestinationUnreadable` carrying the path and the reason.\n- [ ] `look([])` touches no filesystem; a folder the destination lacks costs one `lstat` whatever lies below it.\n- [ ] `replay` renames under the root through `apply_moves` and returns its `ReplayResult`.\n- [ ] `pixi run test -q` ends with `452 passed, 1 skipped`; `pixi run test-cov` shows `src/irsync/destination.py` at 100%.\n\n**Verify:** `pixi run test tests/test_destination.py -q` → `9 passed`; then `pixi run test -q` → `452 passed, 1 skipped`\n\n```json:metadata\n{\"files\": [\"src/irsync/destination.py\", \"tests/test_destination.py\"], \"verifyCommand\": \"pixi run test tests/test_destination.py -q && pixi run test -q\", \"acceptanceCriteria\": [\"LocalDestination(root).look(paths) returns one entry per distinct path: Seen(type, size, mtime_ns) taken by lstat, or None\", \"A path is absent (None) when nothing is there, when a parent is missing or is not a directory, when the root does not exist, or when a parent below the root is a symlink; a symlink on the way to the root is followed\", \"An lstat failure other than absence raises DestinationUnreadable carrying the path and the reason\", \"look([]) touches no filesystem; a folder the destination lacks costs one lstat whatever lies below it\", \"replay renames under the root through apply_moves and returns its ReplayResult\", \"pixi run test -q ends with 452 passed, 1 skipped; destination.py is 100% covered\"], \"modelTier\": \"standard\"}\n```"
     },
     {
@@ -60,5 +60,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-11-26T07:11:53Z"
+  "lastUpdated": "2026-11-26T07:17:52Z"
 }
