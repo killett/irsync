@@ -113,6 +113,54 @@ that rsync would have left alone.
 Cost: on a `--no-exclude` run, one lookup per baseline row under an
 excluded name, skipping a whole folder the destination lacks.
 
+### 2. Which rows are checked, per kind of run
+
+**A run with the default excludes.** rsync never touches the excluded names
+on the destination, so the only thing irsync can do there is take a file
+out.
+
+- Checked: baseline file rows under an excluded name whose inode now
+  appears, once, in the part of the source rsync syncs, and in no other
+  baseline row. Usually none to a few per run.
+- Such a row is kept only when the destination holds a matching copy at the
+  old path and the identity check passes, so that it is certain to become a
+  file move. The replay renames the copy out of the excluded folder:
+  nothing is sent and no second copy is left (case 3).
+- Otherwise the row is dropped and the file is listed as created, as today.
+- Nothing else under an excluded name is listed or counted: the run changes
+  nothing there. No path under a name rsync skips may appear in the
+  modified, created, or deleted lists.
+- AD-2 holds: a lookup happens only when a file has appeared in the synced
+  tree, which already means rsync will run. A run with nothing to do never
+  touches the backup drive.
+
+Folders are handled file by file in such a run. A folder moved out of an
+excluded name is listed as created, with one file move per file the
+destination holds. Renaming the whole folder would carry along whatever
+else the destination has in it, and rsync would then delete those leftovers
+without the preview having listed them. What is left in the destination's
+excluded folder stays there, as before (see `PROGRESS.md`, frozen copies).
+
+**A `--no-exclude` run.** rsync syncs every name, so every baseline row
+under an excluded name is checked by the rule in section 1, files and
+folders alike.
+
+- A folder row is kept when the destination has a folder at its path, and
+  dropped, with every row below it, when the destination has nothing there.
+  A kept folder that moved is a directory move as usual. The files inside
+  are still checked one by one: a matching one rides along with the folder,
+  a missing one is created, a stale one is deleted and created.
+- Not listed: what the destination holds under those names that the
+  baseline has no row for. irsync cannot ask about a path it never
+  recorded. rsync deletes it; the preview's note shrinks to say exactly
+  that, and `--dry-run` still shows every file.
+
+**Boundary.** Only the default-excluded names are checked. A row elsewhere
+is what the last successful run synced and stays trusted. If something
+other than irsync changes the backup, the lists can still be wrong there;
+rsync still makes the backup right, and the replay still skips a missing
+file (AD-9).
+
 ## Options considered
 
 1. **Ask the backup.** Chosen. No snapshot change; works on existing
