@@ -77,6 +77,42 @@ on the backup:
   README stop promising otherwise.
 - **Replay over ssh is the next design**, after this one.
 
+## Design
+
+### 1. Under an excluded name, the backup is asked
+
+A baseline row whose path lies under a default-excluded name is a hint, not
+a fact. Before the diff, irsync looks at that path on the destination with
+an `lstat` and replaces the hint with what is there:
+
+| The destination has, at the row's path | The baseline row is | The diff then reports |
+|---|---|---|
+| nothing | dropped | created, if the source still has the file |
+| a file with the row's size and mtime (whole seconds) | kept as is | a move if the path changed, nothing if it did not |
+| a file that differs | kept, with the destination's size and mtime | modified if the path is the same; deleted (old path) and created (new path) if it changed |
+
+The existing diff (`compute_changes`) then runs unchanged: its "before" side
+describes the backup instead of the source's past. Consequences:
+
+- Case 1: created, and copied because the backup needs it.
+- A current copy on the backup: a move, replayed, nothing transferred.
+- Case 4: a deletion and a creation, which is what rsync does.
+- Case 2: the >50% guard counts only deletions that exist on the backup, and
+  a first transfer is listed as created.
+- A first `--no-exclude` run lists every file the backup lacks under those
+  names as created, where it used to leave them to the note at the top.
+
+The identity check between baseline and source is untouched: a move still
+needs the same inode, size, nanosecond mtime, and birth time (AD-3, AD-13).
+The lookup is a further condition, never a replacement, so it cannot turn
+two different source files into a move. The comparison with the destination
+is to the whole second because that is rsync's test: irsync then never
+lists a move that rsync would follow with a transfer, and never refuses one
+that rsync would have left alone.
+
+Cost: on a `--no-exclude` run, one lookup per baseline row under an
+excluded name, skipping a whole folder the destination lacks.
+
 ## Options considered
 
 1. **Ask the backup.** Chosen. No snapshot change; works on existing
