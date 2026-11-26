@@ -5,8 +5,10 @@ the source drive, the original `rsync` deletes the old path on the backup drive
 and re-transfers the (often huge) file from scratch. `irsync` avoids that by
 keeping an inode snapshot at the root of the source tree, comparing it against
 a fresh snapshot on each run, and replaying just the moves/renames atomically
-on the backup tree before invoking `rsync` for the actual content delta. When
-no source changes are detected at all, the backup drive is never accessed.
+on the backup tree before invoking `rsync` for the actual content delta. The
+replay needs a local backup: on a remote destination (`host:/path`) a moved
+file is deleted and sent again, and the preview says so. When no source
+changes are detected at all, the backup drive is never accessed.
 
 ## Installation
 
@@ -220,6 +222,21 @@ the destination, and irsync would exit 0 and call it a successful backup.
   place. To recover, move it out of the source tree; the next run is then a
   first backup, which needs `--allow-nonempty-dest` if the destination
   already holds a backup.
+- **The backup has to be looked at, and cannot be read.** For the names it
+  normally skips (`.Trash-*`, `.cache`, `unfinished_downloads`), irsync does
+  not assume the backup holds what the source had. Before listing changes it
+  looks at the backup there (file metadata only, never contents): a file is
+  listed as a move only when the backup holds it with the same size and
+  modification time, and is otherwise listed as created and copied. If that
+  look fails for any reason other than the file not being there (permission
+  denied, an I/O error), the run refuses with exit code 2 before writing
+  anything.
+- **A remote destination gets no renames.** Moves are replayed only on a
+  local destination. With `host:/path` as the destination, anything moved or
+  renamed is listed as deleted and created, because rsync deletes it there
+  and sends it again, and a note in the preview says so. Those entries count
+  toward the more-than-half check above, so a large rename to a remote
+  destination is refused until you pass `--allow-massive-delete`.
 - **`--dry-run` changes nothing.** Honored on both the normal (snapshot)
   path and `--no-snapshot`: irsync shows what rsync would do and exits 0
   without touching the destination or persisting a snapshot, on either
@@ -265,6 +282,8 @@ src/irsync/
   preflight.py      # mount / empty-source / nonempty-dest / rsync-present guards
   diff.py           # compute_changes, plan_directory_moves (cycle-safe)
   replay.py         # apply_moves — atomic os.rename on the dest tree
+  destination.py    # Destination, LocalDestination — look at the backup, rename on it
+  baseline.py       # what a baseline may claim about the backup under excluded names
   rsync_runner.py   # build_rsync_command, run_dry_run, run_real_sync
   options.py        # Options dataclass, drivecfg-backed resolve_endpoints/resolve_source
   backup.py         # the orchestrator: snapshot → diff → replay → rsync → persist

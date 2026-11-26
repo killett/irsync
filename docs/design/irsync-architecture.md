@@ -31,10 +31,15 @@ A single run proceeds as follows:
    creations, and deletions. Rows under a path rsync's exclude list skips are
    dropped from both snapshots first, so the diff covers exactly what rsync
    transfers (AD-32).
+   A baseline row under a default-excluded name is a hint: the local backup is
+   asked what it holds there before the diff (AD-36). A remote destination
+   cannot be asked, and its diff reports no moves (AD-37).
 3. **Replay detected moves on the dest.** `apply_moves` performs the dir/file
    renames on the dest tree with `os.rename` (no-clobber guard, cross-device
    pre-flight refusal) **before** rsync runs, so rsync sees files already in
    their new locations.
+   The orchestrator reaches it through `LocalDestination.replay` (AD-38); a
+   remote destination gets no replay.
 4. **Invoke rsync.** rsync transfers the remaining new/changed content, with the
    three reserved-namespace files anchored-excluded.
 5. **Persist a fresh snapshot.** After a successful rsync, the new snapshot is
@@ -46,6 +51,7 @@ changes at all, the run short-circuits before any dest access. This invariant is
 AD-2, and AD-22 closed a pass-10 hole (early dest tempfile cleanup) that was
 secretly waking the backup drive on every run. The one exception is a
 `--no-exclude` run, which always reaches rsync (AD-35).
+Looking at the backup (AD-36) happens only on a run that reaches it anyway.
 
 ## Package layout
 
@@ -61,22 +67,28 @@ secretly waking the backup drive on every run. The one exception is a
 | `display.py` | `display_name`: renders a file name or path so it is safe to print and unambiguous, escaping undecodable bytes, controls, format and separator characters, and backslashes (AD-34) |
 | `snapshot.py` | `snapshot_tree` (iterative walk, `lstat`-based, xdev-aware; raises `FileNotFoundError` / `NotADirectoryError` for a bad root); `Row` TypedDict `(dev, ino, type, nlink, size, mtime_ns, btime_ns, path)` and `Header`; `RowType` / `ROW_TYPES`, the one definition of the row type tags (`f`, `d`, `l`, `o`), used by row validation and by the diff; `write_snapshot`/`read_snapshot` (provenance header + row validation, streaming read, `surrogateescape` encoding; `read_snapshot` still parses the legacy headerless format, whose writer `write_jsonl` and reader `read_jsonl` were removed unused in the 2026-08-01 hygiene pass); shared `_validate_row` helper; `SnapshotMismatch` (the header names a different source root) and `SnapshotCorrupt` (a `ValueError` subclass: a path that is not a regular file, no rows, a malformed or non-object line, a missing key, an unknown type tag, a wrongly typed value, or a malformed path — the whole snapshot is refused rather than partially trusted); reserved-namespace constants `SNAPSHOT_FILENAME = ".irsync_snapshot.jsonl"`, `LOCKFILE_NAME = ".irsync.lock"`, `SNAPSHOT_TEMPFILE_PREFIX = ".irsync-snap-"` and `is_reserved_root_name`, the predicate over them that the snapshot walk and `preflight.py` share |
 | `statx.py` | ctypes wrapper around Linux `statx(2)` for `btime_ns`; returns `-1` when unavailable (non-Linux, no statx, FS without btime, dangling path) so the caller falls back to the size+mtime gate |
-| `diff.py` | `NodeInfo`, `index_by_inode`, `compute_moves` (returns `(dir_moves, file_moves, consumed_keys)`), `prune_redundant_dir_moves`, `plan_directory_moves` (cycle-safe via random temp suffix), `Changes` dataclass `(dir_moves, file_moves, modified, created, deleted)`, `compute_changes` (public API). Move gate: require size + `mtime_ns` match; if both sides have `btime_ns >= 0`, also require `btime_ns` match. `created`/`deleted` filter includes types `l` and `o`; type-change at same path is emitted as both deleted+created |
+| `diff.py` | `NodeInfo`, `index_by_inode`, `compute_moves` (returns `(dir_moves, file_moves, consumed_keys)`), `prune_redundant_dir_moves`, `plan_directory_moves` (cycle-safe via random temp suffix), `Changes` dataclass `(dir_moves, file_moves, modified, created, deleted)`, `compute_changes` (public API). Move gate: require size + `mtime_ns` match; if both sides have `btime_ns >= 0`, also require `btime_ns` match. `created`/`deleted` filter includes types `l` and `o`; type-change at same path is emitted as both deleted+created. `same_file` is the one identity check (AD-3, AD-13), shared with `baseline.py`; `compute_changes(detect_moves=False)` reports a path change as deleted and created (AD-37). |
 | `replay.py` | `apply_moves(dir_moves, file_moves, dest_root) -> ReplayResult`; pure `os.rename`, no-clobber guard, skips a move through a symlinked directory in the backup (`_through_symlink`, AD-9), refuses EXDEV; `CrossDeviceMoveError` + `_preflight_check_xdev` stats every planned src/dst path against `dest_root.st_dev` before any rename runs |
+| `destination.py` | What irsync may ask of a backup (AD-38): the `Destination` protocol (`look(paths)`, `replay(dir_moves, file_moves)`); `LocalDestination` (`look` by `lstat` under the resolved root, never following a symlinked directory below it, one `lstat` per directory on the way, no access for no paths; `replay` through `apply_moves`); `Seen` (type, size, mtime of one entry); `DestinationUnreadable` (a lookup failed for a reason other than absence) |
+| `baseline.py` | What a baseline may say about the backup under the default-excluded names (AD-36), with no I/O: `split_hints`, `holds` (rsync's quick check: size and whole-second mtime), `checked_rows` (hints replaced by what the destination holds), `moved_out_candidates` (the hints a run with the excludes asks about) |
 | `rsync_runner.py` | `build_rsync_command` (anchored excludes for the three reserved-namespace files), `exclude_matcher` (the same exclude list as a path predicate, so the diff leaves out what rsync skips; AD-32), `run_dry_run`, `run_real_sync` (streams stderr live; `start_new_session=True`; routes cancellation through `os.killpg(getpgid(pid), SIGTERM/SIGKILL)` so ssh children die with rsync; installs a scoped SIGTERM handler that raises `KeyboardInterrupt` so cleanup fires on cron timeout) |
-| `backup.py` | Orchestrator: `run_backup` checks that rsync is available (unless `--snapshot-only`), resolves endpoints, runs the mount gates (AD-24, AD-29), acquires `_source_lock` for a local source (AD-8), and dispatches `_run_backup_for_endpoints` / `_run_snapshot_only`; `_run_backup_for_endpoints` runs the snapshot, diff, replay, rsync, persist pipeline and hosts the refusal guards — a corrupt snapshot (`SnapshotCorrupt`, refused per drive with exit 2 — AD-4), the catastrophic-delete ratio (AD-6, `CATASTROPHIC_DELETE_RATIO`), a non-empty destination with no baseline (AD-25), and an empty source with no baseline (AD-28) — skips the no-change short-circuit under `--no-exclude` and opens that run's preview with a note (AD-35), and hands `--no-snapshot` or a remote source to `_run_rsync_only`, which always runs the dry-run (so `--no-snapshot --yes` prints to stdout for cron auditability) and honors `--dry-run` (AD-30). Exit codes `EXIT_REFUSED` (2), `EXIT_LOCK_HELD` (75), `EXIT_ABORTED` (130). Previews: `_emit_preview` is the one place that pages when interactive and prints under `--yes` (AD-7), with `_show_preview` / `_format_preview` for a `Changes`, `_format_first_run_preview`, `_dry_run_preview`, and `_page_output` (`less` with `start_new_session=True`); `_confirm_or_abort`. Also `_atomic_write_snapshot` (fsyncs tempfile before `os.replace`), `_persist_snapshots` (dest first, then src — AD-15), `_cleanup_orphan_tempfiles` (scans both src and dest; dest call deferred until `apply_moves` — AD-22), and `run_all_backups` (an unmounted source is a skip; a failing drive, including one refused by a guard such as a corrupt snapshot, counts as one error and the batch carries on, until `max_errors` errors stop it; any other exception from one drive is logged with its traceback and counted the same way, except `RsyncUnavailable` — AD-33). Catches `CrossDeviceMoveError` around `apply_moves` |
+| `backup.py` | Orchestrator: `run_backup` checks that rsync is available (unless `--snapshot-only`), resolves endpoints, runs the mount gates (AD-24, AD-29), acquires `_source_lock` for a local source (AD-8), and dispatches `_run_backup_for_endpoints` / `_run_snapshot_only`; `_run_backup_for_endpoints` runs the snapshot, diff, replay, rsync, persist pipeline and hosts the refusal guards — a corrupt snapshot (`SnapshotCorrupt`, refused per drive with exit 2 — AD-4), the catastrophic-delete ratio (AD-6, `CATASTROPHIC_DELETE_RATIO`), a non-empty destination with no baseline (AD-25), and an empty source with no baseline (AD-28) — skips the no-change short-circuit under `--no-exclude` and opens that run's preview with a note (AD-35), and hands `--no-snapshot` or a remote source to `_run_rsync_only`, which always runs the dry-run (so `--no-snapshot --yes` prints to stdout for cron auditability) and honors `--dry-run` (AD-30). Exit codes `EXIT_REFUSED` (2), `EXIT_LOCK_HELD` (75), `EXIT_ABORTED` (130). Previews: `_emit_preview` is the one place that pages when interactive and prints under `--yes` (AD-7), with `_show_preview` / `_format_preview` for a `Changes`, `_format_first_run_preview`, `_dry_run_preview`, and `_page_output` (`less` with `start_new_session=True`); `_confirm_or_abort`. Also `_atomic_write_snapshot` (fsyncs tempfile before `os.replace`), `_persist_snapshots` (dest first, then src — AD-15), `_cleanup_orphan_tempfiles` (scans both src and dest; dest call deferred until `apply_moves` — AD-22), and `run_all_backups` (an unmounted source is a skip; a failing drive, including one refused by a guard such as a corrupt snapshot, counts as one error and the batch carries on, until `max_errors` errors stop it; any other exception from one drive is logged with its traceback and counted the same way, except `RsyncUnavailable` — AD-33). Catches `CrossDeviceMoveError` around `apply_moves`. `_plan_changes` builds the diff's inputs: it asks the destination about baseline rows under the default-excluded names (AD-36) and, for a remote destination, turns moves into deletions and creations (AD-37). |
 | `preflight.py` | Identity checks that run before irsync writes anything: `mount_gate_root` and `check_mounted` (the mountpoint gate under `base_dir`, with a `role` that raises `SourceNotMounted` or `DestinationNotMounted`, both subclasses of `EndpointNotMounted`; remotes and `base_dir` itself are exempt — AD-24, AD-29); `top_level_names` (a root's names, irsync's own left out); `foreign_dest_entries` (destination-root entries that are not irsync's own, `UnsafeDestination` when the destination cannot be listed — AD-25); `split_top_level` / `TopLevelSplit` (a destination's top-level names grouped as kept by rsync's excludes, also on the source, or deleted by a real run — AD-25); `source_root_is_empty` and `fresh_snapshot_is_empty` (the empty-source guard on the `--no-snapshot` and snapshot paths — AD-28); `check_rsync_available` (`RsyncUnavailable`). Reserved-name filtering goes through `snapshot.is_reserved_root_name` |
 
 ### `tests/`
 
 | File | Contents |
 |---|---|
-| `conftest.py` | Shared fixtures and helpers: `make_tree` (random trees with unique file sizes), `make_options` (factory building `Options` from a tmp_path-rooted drive config), `basic_options` (that factory's defaults), `write_drive_config` (writes a `drives.toml` of invented drive ids under a root), `cli_args` (the argparse `Namespace` the orchestrator expects, with overrides), `subprocess_pythonpath` (the `PYTHONPATH` a `python -m irsync` subprocess needs), `tree_signature`, `inode_for`; the invented ids `DRIVE_IDS`, `SOURCE_DRIVE`, `BACKUP_DRIVE` |
+| `conftest.py` | Shared fixtures and helpers: `make_tree` (random trees with unique file sizes), `make_options` (factory building `Options` from a tmp_path-rooted drive config), `basic_options` (that factory's defaults), `write_drive_config` (writes a `drives.toml` of invented drive ids under a root), `cli_args` (the argparse `Namespace` the orchestrator expects, with overrides), `subprocess_pythonpath` (the `PYTHONPATH` a `python -m irsync` subprocess needs), `tree_signature`, `inode_for`; the invented ids `DRIVE_IDS`, `SOURCE_DRIVE`, `BACKUP_DRIVE`. `remote_host` puts a stand-in `ssh` first on `PATH` so that `host:/path` reaches this machine, and skips where rsync cannot be driven that way. |
 | `test_paths.py` | path-helper coverage |
 | `test_display.py` | `display_name`: undecodable bytes, ASCII and other controls, format and separator characters, backslash doubling, ordinary names unchanged |
 | `test_snapshot.py` | snapshot round-trip (incl. `SnapshotCorrupt` for malformed or non-object lines, missing keys and invalid types, a file with no rows, wrongly typed values, paths irsync could not have written, a snapshot path that is a directory or FIFO; dotted names still valid; non-UTF-8 round-trip, streaming read, depth-1500 walk) |
 | `test_diff.py` | diff/move detection (incl. symlink add/delete/replace, NFS-sim via real `snapshot_tree` + forged row, real rename, type-"o" add/delete, type-change at same path, real-syscall kernel inode reuse — skips where btime collapses to mtime) |
 | `test_replay.py` | `apply_moves` behavior (incl. moves through a symlinked directory skipped, a symlinked destination root still replayed) |
+| `test_destination.py` | `LocalDestination` on real files: types, absence, a missing root, a symlinked folder not followed, a symlinked root followed, an unreadable folder, no access for no paths, one lookup for a missing folder, replay |
+| `test_baseline.py` | `split_hints`, `holds` (both edges of the whole second), the 2026-11-25 design's section 1 table through `compute_changes`, `moved_out_candidates`, and the invariant that a run with the excludes lists nothing under an excluded name |
+| `test_excluded_names.py` | end to end with the real rsync and a local destination (AD-36): the reproduced cases 1 to 4, folders moved out, the whole-second rule against rsync itself, a backup that cannot be read, the note, and no lookup without a file moved out |
+| `test_remote_destination.py` | end to end to a remote destination through `remote_host` (AD-37): moves listed as deleted and created, the note and the warning, the >50% guard and its added sentence, `--no-exclude` leaving the excluded names out of the lists |
 | `test_rsync_runner.py` | rsync invocation + subprocess isolation (incl. `start_new_session`, KeyboardInterrupt-during-stream, killpg-on-cancel, SIGTERM handler installed/restored/raises), and `exclude_matcher` checked against what real rsync copies |
 | `test_options.py` | config-backed endpoint resolution (drive ids and named endpoints from an invented-id `drivecfg` config, plain paths, remotes), `Options` without a config, `all_backups` from `backup_order`, `needs_drive_config`'s rules, `resolve_source` |
 | `test_preflight.py` | pre-flight identity checks: `mount_gate_root`, `check_mounted` (exemptions, `role`-specific exceptions), `foreign_dest_entries`, `split_top_level` (exclude-first grouping, `--no-exclude`, exact name matching), `source_root_is_empty`, `fresh_snapshot_is_empty`, `check_rsync_available` |
@@ -85,10 +97,11 @@ secretly waking the backup drive on every run. The one exception is a
 | `test_backup.py` | orchestrator coverage (incl. persist ordering, dest orphan cleanup, pager session detachment, dest-untouched-on-no-change, fsync-before-replace ordering, a corrupt snapshot refusing only its own drive, a snapshot path outside the tree refused with files outside the backup untouched, a source symlink replaced by a directory writing nothing outside the backup, an `ALL` run surviving a bad snapshot or an unexpected per-drive error while missing rsync still stops it, excluded paths left out of the diff: trash moves, restores, an emptied trash, `--no-exclude`; `--no-exclude` reaching rsync on an unchanged source, its preview note, and the short-circuit kept for an empty exclude list) |
 | `test_integration.py` | 4 end-to-end tests: umbrella exercising every reproducible bug from passes 1-7 + symlink add/delete + 8 random fuzz moves; cross-device refusal via real preflight; isolated H1 symlink add/delete regression net; `--no-snapshot --yes` audit-trail invariant. Pickers use the 10-attempt no-op retry loops from `make_random_moves.py` |
 
-Total: 432 tests as of 2026-11-23 (425 on 2026-11-22, 381 on 2026-10-19, 337
-at the 2026-10-18 hygiene pass, 168 at the pass-10 migration). One of them,
-the kernel inode-reuse btime test, skips where btime collapses to mtime (e.g.
-tmpfs), so a run reports either 432 passed or 431 passed, 1 skipped.
+Total: 511 tests as of 2026-11-25 (432 on 2026-11-23, 425 on 2026-11-22, 381 on
+2026-10-19, 337 at the 2026-10-18 hygiene pass, 168 at the pass-10 migration).
+One of them, the kernel inode-reuse btime test, skips where btime collapses to
+mtime (e.g. tmpfs), so a run reports either 511 passed or 510 passed, 1
+skipped.
 
 ## Architectural decisions
 
@@ -110,6 +123,9 @@ drive dies and the user restores from backup, they get the snapshot back
 automatically. Rationale: this lets the cheap "anything changed?" check work
 without spinning up the backup drive. See AD-22 for the pass-10 closure of a
 hole that was secretly violating this invariant.
+Since AD-36 the backup's own files can be examined before the preview (an
+`lstat` of paths under the default-excluded names), but only on a run that
+reaches the backup anyway.
 
 ### 3. Inode-based move detection only; no content hashing
 
@@ -197,6 +213,10 @@ that slipped past provenance checks, swapped source/dest arguments, or partial
 source-tree availability (e.g., a network mount went stale). The threshold is on
 `deleted` only — not `modified` or `created` — because deletions are the
 irreversible operation.
+`before_rows` is what the diff was computed against: the rows rsync syncs
+(AD-32), with rows under a default-excluded name only as far as the backup
+holds them (AD-36). On a remote destination a moved or renamed entry counts as
+deleted, because rsync deletes it there (AD-37).
 
 ### 7. Cron-friendly: --yes preserves preview as stdout
 
@@ -239,6 +259,8 @@ symlink pointed), and a tampered snapshot can name one (`link/victim.txt`).
 Rsync then transfers the skipped data. Paths are built on the resolved
 `dest_root`, so a destination reached through a symlinked mount point still
 replays.
+The orchestrator reaches it through `LocalDestination.replay` (AD-38). A remote
+destination gets no replay, and its run says so (AD-37).
 
 ### 10. Cycle-breaking temp names use random suffixes
 
@@ -602,6 +624,13 @@ destination's `.Trash-*` stay there, since rsync never touches excluded paths
 on the receiving side. Because a run with the excludes never copies the
 excluded names, a `--no-exclude` run cannot trust an empty diff (AD-35).
 
+Amended 2026-11-25 (AD-36): a baseline row under a default-excluded name is no
+longer dropped or trusted wholesale. The local backup is asked what it holds
+there, so a file moved out of an excluded name is a creation only when the
+backup lacks it and a move when the backup holds it, and under `--no-exclude`
+the diff is taken against what the backup holds rather than against "nothing
+is dropped".
+
 ### 33. An ALL run survives any one drive's exception
 
 `run_all_backups` catches the exception types it expects per drive (AD-25,
@@ -664,6 +693,104 @@ changes the snapshot format for an occasional flag. Consequence: every
 stay frozen on the backup during later runs with the excludes (see
 `PROGRESS.md`, Open questions). Design:
 `docs/superpowers/specs/2026-11-23-no-exclude-runs-rsync-design.md`.
+
+Amended 2026-11-25 (AD-36): for a local destination the lists of a
+`--no-exclude` run now cover the excluded names, checked against the backup,
+so on an unchanged source whose backup lacks them they are listed as created
+and the "No source changes ... but --no-exclude" line is logged only when the
+backup already holds every recorded row. The note there keeps its first line
+and now names the one thing the lists cannot show: a file under those names
+that only the backup has and no earlier run recorded, which rsync deletes. The
+original note stays for a remote destination (AD-37).
+
+### 36. Under an excluded name, the backup is asked
+
+A snapshot records every row of the source, but a run with the default
+excludes never copies the excluded names, so a baseline row under one of them
+says what the source had, not what the backup holds. Taking such a row as a
+fact went wrong in both directions (reproduced 2026-11-25). After runs with
+the excludes, `--no-exclude` previewed a file moved out of
+`unfinished_downloads` as a move though the backup had no copy, and listed
+deletions the backup never held, counting them toward the >50% guard (AD-6),
+which refused a run that deleted nothing. After a `--no-exclude` run, a run
+with the excludes copied such a file in full though the backup held an
+identical copy at the old path, which then stayed.
+
+Such a row is now a hint (`baseline.split_hints`), and before the diff the
+local destination is asked what it holds there (`Destination.look`, an `lstat`,
+never a read of file contents; AD-38):
+
+- A `--no-exclude` run asks about every hint (`baseline.checked_rows`). Nothing
+  there: the hint is dropped, so the path is created if the source still has
+  it. A matching entry: the hint is kept and can become a move. Anything else:
+  the hint is kept with the destination's type, size and mtime, so the path is
+  modified, or deleted and created.
+- A run with the excludes changes nothing under those names, so it asks only
+  about a file that has moved out of one (`baseline.moved_out_candidates`: a
+  regular file with one path in the baseline and one in the synced tree, the
+  same file by `diff.same_file`), and keeps the hint only when the backup holds
+  it, which makes it a file move. A folder moved out is handled file by file:
+  renamed whole, it would carry along whatever else the backup has in it, and
+  rsync would delete that without the preview having listed it.
+
+"Holds", for a regular file, is rsync's own quick check: the same size, and the
+same mtime to the whole second (`baseline.holds`; checked on rsync 3.4.1, which
+leaves alone a copy whose mtime differs only in nanoseconds and re-sends one a
+second apart). irsync then never lists a move that rsync follows with a
+transfer, and never refuses one rsync would have left alone. The identity check
+between baseline and source (AD-3, AD-13) is untouched: the lookup is a further
+condition. `compute_changes` is unchanged; its "before" side now describes the
+backup. A lookup happens only on a run that reaches the backup anyway: a
+`--no-exclude` run (AD-35), or a run in which a file has appeared in the synced
+tree (AD-2). A lookup that fails for any reason but absence refuses the run
+with exit 2 before anything is written (`DestinationUnreadable`). The snapshot
+format is unchanged, and a row elsewhere stays trusted: it is what the last
+successful run synced.
+
+Not covered: a file renamed inside the excluded folder after the backup got it
+(one unneeded copy), and what the backup holds under those names that no
+baseline recorded (rsync deletes it under `--no-exclude`; the preview's note
+says so, AD-35). Rejected: diffing with the default excludes on both sides
+whatever the flags (it copies what the backup already holds), recording the
+exclude list in the snapshot header (lost at the next run with the excludes),
+and carrying rows forward in the snapshot (a format change that cannot see
+what irsync did not record itself). Design:
+`docs/superpowers/specs/2026-11-25-excluded-names-backup-truth-design.md`.
+
+### 37. A remote destination claims no moves
+
+`apply_moves` renames with `os.rename` (AD-9), so a remote destination
+(`host:/path`) never got the replay, from 0.1.0 on: the preview listed moves,
+nothing logged the skip, and rsync's `--delete-before` deleted everything that
+had moved and sent it again, unseen by the >50% guard. Reproduced 2026-11-25
+with a stand-in ssh: for a renamed folder of 12 files and one moved file, 14
+deletions and 6.8 MB sent, and a transfer cut off part-way left the backup with
+neither copy of what was not yet sent.
+
+Until a helper run over ssh exists (the next design), a run to a remote
+destination says what happens. The diff is computed without move detection
+(`compute_changes(detect_moves=False)`), so an entry whose path changed is
+listed as deleted and created, entry by entry. When moves were found, a note
+opens the preview and a warning is logged. The >50% guard counts those entries,
+so a large rename is refused until `--allow-massive-delete`, and the refusal
+says that a rename counts there. The destination cannot be examined either, so
+AD-36 does not apply: a `--no-exclude` run leaves the excluded names out of the
+lists on both sides and keeps AD-35's original note. What rsync transfers is
+unchanged.
+
+### 38. One interface for the destination
+
+`destination.Destination` is what irsync may ask of a backup: `look(paths)`,
+which reports per path what is there (`Seen`: type, size, mtime) or nothing,
+and `replay(dir_moves, file_moves)`. `LocalDestination` implements it with
+`lstat` and `apply_moves`; the orchestrator holds `None` for a remote
+destination (AD-37), and a helper run over ssh can become the second
+implementation without changing the callers. `look` takes every path in one
+call, so that such an implementation needs one round trip. It never follows a
+symlinked directory below the root, the rule the replay has (AD-9): a path
+behind one is reported as absent. Each directory on the way is examined once,
+so a folder the backup lacks costs one `lstat` whatever lies below it, and
+asking about no path touches nothing.
 
 ## Appendix A — bug catalog
 

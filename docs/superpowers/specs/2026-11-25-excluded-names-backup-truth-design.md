@@ -1,8 +1,8 @@
 # Design: list a move only when the backup can make it
 
 Date: 2026-11-25
-Status: approved (brainstorm and the owner's review of this file,
-2026-11-25); not yet implemented
+Status: implemented on branch `ask-the-backup` (plan:
+`docs/superpowers/plans/2026-11-25-ask-the-backup.md`); not merged
 
 ## Problem
 
