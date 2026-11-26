@@ -1,7 +1,8 @@
-# Design: under excluded names, copy only what the backup lacks
+# Design: list a move only when the backup can make it
 
 Date: 2026-11-25
-Status: brainstorm in progress; approach chosen, design sections under review
+Status: design approved section by section (owner, 2026-11-25); awaiting the
+owner's review of this file; not yet implemented
 
 ## Problem
 
@@ -82,8 +83,11 @@ on the backup:
 ### 1. Under an excluded name, the backup is asked
 
 A baseline row whose path lies under a default-excluded name is a hint, not
-a fact. Before the diff, irsync looks at that path on the destination with
-an `lstat` and replaces the hint with what is there:
+a fact. "Under a default-excluded name" means that the row's own name or one
+of its parent folders matches `Options.exclude_dirs`, as `exclude_matcher`
+decides it, whether or not the run passes `--no-exclude`. Before the diff,
+irsync looks at that path on the destination with an `lstat` and replaces
+the hint with what is there:
 
 | The destination has, at the row's path | The baseline row is | The diff then reports |
 |---|---|---|
@@ -91,14 +95,17 @@ an `lstat` and replaces the hint with what is there:
 | a file with the row's size and mtime (whole seconds) | kept as is | a move if the path changed, nothing if it did not |
 | a file that differs | kept, with the destination's size and mtime | modified if the path is the same; deleted (old path) and created (new path) if it changed |
 
-The existing diff (`compute_changes`) then runs unchanged: its "before" side
-describes the backup instead of the source's past. Consequences:
+The diff (`compute_changes`) then runs as it does today: its "before" side
+describes the backup instead of the source's past. Section 2 says which
+rows are asked about in each kind of run; in a run with the default
+excludes only the table's second line can apply. Consequences:
 
 - Case 1: created, and copied because the backup needs it.
 - A current copy on the backup: a move, replayed, nothing transferred.
 - Case 4: a deletion and a creation, which is what rsync does.
-- Case 2: the >50% guard counts only deletions that exist on the backup, and
-  a first transfer is listed as created.
+- Case 2: the >50% guard counts only deletions that exist on the backup,
+  against a "before" that holds only rows the backup has, and a first
+  transfer is listed as created.
 - A first `--no-exclude` run lists every file the backup lacks under those
   names as created, where it used to leave them to the note at the top.
 
@@ -153,7 +160,20 @@ folders alike.
 - Not listed: what the destination holds under those names that the
   baseline has no row for. irsync cannot ask about a path it never
   recorded. rsync deletes it; the preview's note shrinks to say exactly
-  that, and `--dry-run` still shows every file.
+  that, and `--dry-run` still shows every file. For a local destination
+  the note (AD-35) becomes, its first line unchanged:
+
+  ```
+  === --no-exclude: rsync also syncs .Trash-*, .cache, unfinished_downloads ===
+  The lists below cover these names too, checked against the backup. They
+  cannot show one thing: a file there that only the backup has and no earlier
+  run recorded, which rsync DELETES. --dry-run shows every file.
+  ```
+
+- Such a run still always reaches rsync (AD-35), because only rsync finds
+  what the baseline never recorded. When the diff is empty it still logs
+  "No source changes since last backup, but --no-exclude: running rsync
+  anyway"; that now means the backup holds every recorded row.
 
 **Boundary.** Only the default-excluded names are checked. A row elsewhere
 is what the last successful run synced and stays trusted. If something
@@ -179,10 +199,13 @@ remote backup nor rename on it. For a remote destination:
   backup and sends them again.
   ```
 
+  A count of zero is left out ("3 file moves cannot be replayed"). Under
+  `--no-exclude` this note follows the `--no-exclude` note.
 - The >50% guard (AD-6) counts them, since they are deletions on the backup.
   A behaviour change: a large rename to a remote destination is refused
-  until `--allow-massive-delete` is passed, under `--yes` too. The refusal
-  says that a rename counts on a remote destination.
+  until `--allow-massive-delete` is passed, under `--yes` too. When the
+  note above applies, the refusal adds: "On a remote destination a moved or
+  renamed entry counts, because rsync deletes it there and sends it again."
 - Excluded names are never checked. A run with the default excludes is as
   today. A `--no-exclude` run leaves those names out of the lists on both
   sides and keeps today's note (AD-35), which points to `--dry-run` for
@@ -216,6 +239,8 @@ A run that has a baseline:
 5. Build "before" from the trusted rows plus the checked hints, and diff.
 6. Guard, preview, prompt, as today.
 7. Replay through the destination, run rsync, persist, as today.
+
+A run with no usable baseline is unchanged: it has no rows to check.
 
 Unchanged: the snapshot format and what is written to it, the replay's own
 checks (no overwrite, the cross-filesystem refusal, the symlink rule), and
@@ -252,6 +277,70 @@ and are tested without a destination; the one new piece of I/O is `look`.
   there on every run unless `--modify-window` is used, which irsync does
   not pass. irsync follows rsync's test, so it finds no moves out of
   excluded names there and makes nothing worse.
+
+### 6. Tests and docs
+
+Every test is written to fail first. The end-to-end ones run on real files
+with the real rsync, because the rule rests on what `lstat` and rsync report
+(see `PROGRESS.md`, the synthesized-row trap).
+
+The reproduced cases become regression tests:
+
+1. Case 1: first `--no-exclude`, a file moved out, the backup lacks it:
+   listed as created, not as a move; the backup ends identical.
+2. Case 2: deletions and an edit inside an excluded folder the backup never
+   held are not listed and the >50% guard does not refuse. When the backup
+   does hold them, they are listed and counted.
+3. Case 3: a run with the excludes after a `--no-exclude` run, a file moved
+   out: a file move, nothing sent, no second copy left.
+4. Case 4: a stale copy on the backup: deleted and created; the backup ends
+   identical.
+5. A second `--no-exclude` run in a row is still a move with nothing sent
+   (passes today; a guard against regressing).
+
+New behaviour:
+
+6. A folder moved out: file by file in a run with the excludes; a directory
+   move under `--no-exclude`, with a missing child created and a stale child
+   deleted and created.
+7. Whatever irsync accepts as a move, rsync then leaves alone: a copy whose
+   mtime differs only in nanoseconds is a move with nothing sent; one a
+   second apart is not a move.
+8. A run with the default excludes and nothing to do performs no lookup
+   (AD-2).
+9. A run with the excludes never lists a path under an excluded name as
+   modified, created, or deleted.
+10. A lookup error refuses the run with exit 2 and leaves the backup
+    unchanged.
+11. A symlinked folder in the backup is not followed.
+12. A remote destination, with a stand-in `ssh` on `PATH` as a fixture:
+    moves listed as deleted and created, the note with its counts, the
+    guard refusing a large rename and saying why, `--allow-massive-delete`
+    letting it through, and a `--no-exclude` run leaving the excluded names
+    out of the lists.
+
+Without a destination: section 1's table row by row, the candidate picking
+of section 2, and the shared identity check. The existing move tests pass
+unchanged.
+
+Some existing `--no-exclude` tests change: on an unchanged source whose
+backup lacks the excluded names, the diff now lists them as created, so the
+"No source changes since last backup, but --no-exclude" line is no longer
+logged there, and the note has new wording. The plan names each test.
+
+Docs:
+
+- Architecture doc: new decisions for "under an excluded name the backup is
+  asked", "a remote destination claims no moves", and the destination
+  interface; updates to AD-2 (when the destination is read before the
+  preview), AD-9, AD-32, and AD-35 (the note's wording); the module table.
+- README and `--help`: the `--no-exclude` preview, and that the replay needs
+  a local destination.
+- `PROGRESS.md`: current work, and the open questions this touches (frozen
+  copies, replay over ssh).
+
+Version: these are behaviour changes, so the next release is 0.2.0.
+Releasing stays a separate step the owner triggers.
 
 ## Options considered
 
