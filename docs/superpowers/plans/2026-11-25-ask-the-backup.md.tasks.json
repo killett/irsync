@@ -16,7 +16,7 @@
     {
       "id": 3,
       "subject": "Task 3: Baseline rows checked against the destination",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `irsync.baseline` splits a baseline into trusted rows and hints, decides whether the destination holds a row, replaces hints by what the destination holds, and picks the hints a run with the excludes may ask about, all without I/O.\n\n**Files:**\n- Create: `src/irsync/baseline.py`\n- Create: `tests/test_baseline.py`\n\n**Acceptance Criteria:**\n- [ ] `split_hints(rows, unvouched)` returns `(trusted, hints)`, each in the baseline's order.\n- [ ] `holds(row, there)`: a regular file is held when the entry is a file of the same size whose mtime agrees to the whole second, and the row's mtime is recorded; any other row is held when the entry has the row's type.\n- [ ] `checked_rows(hints, seen)`: nothing there drops the row; a held row is kept unchanged; anything else is kept with the destination's type, size and `mtime_ns`.\n- [ ] `moved_out_candidates(hints, trusted, after)` returns only regular-file hints whose inode has exactly that one path in the baseline and exactly one path in `after`, where it is still a regular file and `same_file` holds.\n- [ ] Through `compute_changes`, the spec's section 1 table holds line by line, and admitting only candidates lists no path under an excluded name as modified, created or deleted.\n- [ ] `pixi run test -q` ends with `482 passed, 1 skipped`; `pixi run test-cov` shows `src/irsync/baseline.py` at 100%.\n\n**Verify:** `pixi run test tests/test_baseline.py -q` → `30 passed`; then `pixi run test -q` → `482 passed, 1 skipped`\n\n```json:metadata\n{\"files\": [\"src/irsync/baseline.py\", \"tests/test_baseline.py\"], \"verifyCommand\": \"pixi run test tests/test_baseline.py -q && pixi run test -q\", \"acceptanceCriteria\": [\"split_hints(rows, unvouched) returns (trusted, hints), each in the baseline's order\", \"holds(row, there): a regular file is held when the entry is a file of the same size whose mtime agrees to the whole second and the row's mtime is recorded; any other row when the entry has the row's type\", \"checked_rows(hints, seen): nothing there drops the row; a held row is kept unchanged; anything else is kept with the destination's type, size and mtime_ns\", \"moved_out_candidates(hints, trusted, after) returns only regular-file hints whose inode has exactly that one path in the baseline and exactly one path in after, where it is still a regular file and same_file holds\", \"Through compute_changes, the spec's section 1 table holds line by line, and admitting only candidates lists no path under an excluded name as modified, created or deleted\", \"pixi run test -q ends with 482 passed, 1 skipped; baseline.py is 100% covered\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         1,
@@ -60,5 +60,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-11-26T07:17:52Z"
+  "lastUpdated": "2026-11-26T07:26:34Z"
 }
