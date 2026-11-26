@@ -97,10 +97,10 @@ Looking at the backup (AD-36) happens only on a run that reaches it anyway.
 | `test_backup.py` | orchestrator coverage (incl. persist ordering, dest orphan cleanup, pager session detachment, dest-untouched-on-no-change, fsync-before-replace ordering, a corrupt snapshot refusing only its own drive, a snapshot path outside the tree refused with files outside the backup untouched, a source symlink replaced by a directory writing nothing outside the backup, an `ALL` run surviving a bad snapshot or an unexpected per-drive error while missing rsync still stops it, excluded paths left out of the diff: trash moves, restores, an emptied trash, `--no-exclude`; `--no-exclude` reaching rsync on an unchanged source, its preview note, and the short-circuit kept for an empty exclude list) |
 | `test_integration.py` | 4 end-to-end tests: umbrella exercising every reproducible bug from passes 1-7 + symlink add/delete + 8 random fuzz moves; cross-device refusal via real preflight; isolated H1 symlink add/delete regression net; `--no-snapshot --yes` audit-trail invariant. Pickers use the 10-attempt no-op retry loops from `make_random_moves.py` |
 
-Total: 511 tests as of 2026-11-25 (432 on 2026-11-23, 425 on 2026-11-22, 381 on
+Total: 520 tests as of 2026-11-26 (432 on 2026-11-23, 425 on 2026-11-22, 381 on
 2026-10-19, 337 at the 2026-10-18 hygiene pass, 168 at the pass-10 migration).
 One of them, the kernel inode-reuse btime test, skips where btime collapses to
-mtime (e.g. tmpfs), so a run reports either 511 passed or 510 passed, 1
+mtime (e.g. tmpfs), so a run reports either 520 passed or 519 passed, 1
 skipped.
 
 ## Architectural decisions
@@ -727,9 +727,11 @@ never a read of file contents; AD-38):
   modified, or deleted and created.
 - A run with the excludes changes nothing under those names, so it asks only
   about a file that has moved out of one (`baseline.moved_out_candidates`: a
-  regular file with one path in the baseline and one in the synced tree, the
-  same file by `diff.same_file`), and keeps the hint only when the backup holds
-  it, which makes it a file move. A folder moved out is handled file by file:
+  regular file with one path in the baseline and one path on the source, that
+  one in the synced tree, the same file by `diff.same_file`; a hard link left
+  under the excluded name disqualifies it, since renaming the backup's copy
+  would take it from a path the source still has), and keeps the hint only
+  when the backup holds it, which makes it a file move. A folder moved out is handled file by file:
   renamed whole, it would carry along whatever else the backup has in it, and
   rsync would delete that without the preview having listed it.
 
@@ -739,10 +741,12 @@ leaves alone a copy whose mtime differs only in nanoseconds and re-sends one a
 second apart). irsync then never lists a move that rsync follows with a
 transfer, and never refuses one rsync would have left alone. The identity check
 between baseline and source (AD-3, AD-13) is untouched: the lookup is a further
-condition. `compute_changes` is unchanged; its "before" side now describes the
-backup. A lookup happens only on a run that reaches the backup anyway: a
-`--no-exclude` run (AD-35), or a run in which a file has appeared in the synced
-tree (AD-2). A lookup that fails for any reason but absence refuses the run
+condition. `compute_changes` is unchanged apart from the `detect_moves` switch
+(AD-37); its "before" side now describes the backup. A lookup happens only on a
+run that reaches the backup anyway: a `--no-exclude` run (AD-35), or a run in
+which a file has appeared in the synced tree (AD-2); a `--dry-run` of either,
+and a run the >50% guard then refuses, read the backup and write nothing. A
+lookup that fails for any reason but absence refuses the run
 with exit 2 before anything is written (`DestinationUnreadable`). The snapshot
 format is unchanged, and a row elsewhere stays trusted: it is what the last
 successful run synced.
@@ -771,7 +775,8 @@ Until a helper run over ssh exists (the next design), a run to a remote
 destination says what happens. The diff is computed without move detection
 (`compute_changes(detect_moves=False)`), so an entry whose path changed is
 listed as deleted and created, entry by entry. When moves were found, a note
-opens the preview and a warning is logged. The >50% guard counts those entries,
+at the top of the preview says so, after the `--no-exclude` note when both
+apply, and a warning is logged. The >50% guard counts those entries,
 so a large rename is refused until `--allow-massive-delete`, and the refusal
 says that a rename counts there. The destination cannot be examined either, so
 AD-36 does not apply: a `--no-exclude` run leaves the excluded names out of the

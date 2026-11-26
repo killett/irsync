@@ -226,11 +226,12 @@ the destination, and irsync would exit 0 and call it a successful backup.
   normally skips (`.Trash-*`, `.cache`, `unfinished_downloads`), irsync does
   not assume the backup holds what the source had. Before listing changes it
   looks at the backup there (file metadata only, never contents): a file is
-  listed as a move only when the backup holds it with the same size and
-  modification time, and is otherwise listed as created and copied. If that
-  look fails for any reason other than the file not being there (permission
-  denied, an I/O error), the run refuses with exit code 2 before writing
-  anything.
+  listed as a move only when the backup holds it with the same size and the
+  same modification time to the second, and is otherwise listed as created
+  and copied (under `--no-exclude`, a stale copy at the old path is also
+  listed as deleted). If that look fails for any reason other than the file
+  not being there (permission denied, an I/O error), the run refuses with
+  exit code 2 before writing anything.
 - **A remote destination gets no renames.** Moves are replayed only on a
   local destination. With `host:/path` as the destination, anything moved or
   renamed is listed as deleted and created, because rsync deletes it there
