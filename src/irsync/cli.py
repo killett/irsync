@@ -25,8 +25,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "rsync. Before each backup, irsync compares an inode snapshot of the source tree "
             "against the previous snapshot to detect moves/renames; those moves are replayed "
             "atomically on the backup tree before rsync runs, so renamed multi-GB files are "
-            "not retransferred. If nothing changed since the last backup, the backup drive is "
-            "never accessed."
+            "not retransferred. The replay needs a local destination: a remote destination "
+            "(host:/path) cannot be renamed on yet, so a moved file is deleted there and sent "
+            "again. If nothing changed since the last backup, the backup drive is never "
+            "accessed."
         ),
     )
     parser.add_argument(

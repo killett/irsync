@@ -150,6 +150,50 @@ class TestFormatPreview:
             "=== Directory moves (0) ===",
         ]
 
+    @pytest.mark.parametrize(
+        ("unreplayed", "header"),
+        [
+            (
+                (1, 1),
+                "=== Remote destination: 1 directory move and 1 file move "
+                "cannot be replayed ===",
+            ),
+            ((0, 3), "=== Remote destination: 3 file moves cannot be replayed ==="),
+            (
+                (2, 0),
+                "=== Remote destination: 2 directory moves cannot be replayed ===",
+            ),
+        ],
+        ids=["both", "files-only", "folders-only"],
+    )
+    def test_unreplayed_moves_get_a_note_after_the_no_exclude_note(
+        self, unreplayed, header
+    ):
+        # Behavior: when a remote destination cannot replay moves, a note
+        # says how many and that they are listed as deleted and created.
+        # It follows the --no-exclude note, and a count of zero is left
+        # out.
+        # Bug caught: "0 directory moves and 3 file moves" reads as if a
+        # folder were involved; a note placed first would push the
+        # --no-exclude warning about DELETING below it.
+        # Expected values: the text in the 2026-11-25 design, section 3.
+        lines = _format_preview(
+            Changes(), unexcluded=[".cache"], unreplayed=unreplayed
+        ).splitlines()
+        assert lines[0] == "=== --no-exclude: rsync also syncs .cache ==="
+        assert lines[4:8] == [
+            header,
+            "They are listed below as deleted and created: rsync deletes them on the",
+            "backup and sends them again.",
+            "=== Directory moves (0) ===",
+        ]
+
+    def test_no_remote_note_when_every_move_can_be_replayed(self):
+        # Bug caught: a note shown on every run to a remote destination
+        # would say moves were turned into deletions when there were none.
+        text = _format_preview(Changes(file_moves=[("a", "b")]))
+        assert "Remote destination" not in text
+
 
 class TestPreviewNamesSurviveStrictOutput:
     def test_moved_non_utf8_file_does_not_crash_a_yes_run(self, tmp_path):

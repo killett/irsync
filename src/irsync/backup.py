@@ -161,8 +161,38 @@ def _persist_snapshots(rows: list[Row], src_root: Path, dest_root: Path | None) 
     _atomic_write_snapshot(rows, src_root, src_root / SNAPSHOT_FILENAME)
 
 
+_REMOTE_RENAME_COUNTS = (
+    " On a remote destination a moved or renamed entry counts, because rsync "
+    "deletes it there and sends it again."
+)
+"""Added to the >50% refusal when a remote destination turned moves into deletions."""
+
+
+def _moves_text(dir_moves: int, file_moves: int) -> str:
+    """Name a number of directory and file moves, leaving out a count of zero.
+
+    Args:
+        dir_moves: How many directory moves.
+        file_moves: How many file moves.
+
+    Returns:
+        For example ``"1 directory move and 3 file moves"`` or
+        ``"3 file moves"``; empty when both counts are zero.
+    """
+    parts: list[str] = []
+    if dir_moves:
+        parts.append(_count(dir_moves, "directory move", "directory moves"))
+    if file_moves:
+        parts.append(_count(file_moves, "file move", "file moves"))
+    return " and ".join(parts)
+
+
 def _format_preview(
-    changes: Changes, *, unexcluded: Sequence[str] = (), checked: bool = False
+    changes: Changes,
+    *,
+    unexcluded: Sequence[str] = (),
+    checked: bool = False,
+    unreplayed: tuple[int, int] = (0, 0),
 ) -> str:
     """Build the full pre-confirmation preview text — every move, deletion, creation.
 
@@ -181,6 +211,9 @@ def _format_preview(
             backup (a local destination). The note then names the one thing
             the lists cannot show; otherwise it says they show only what
             changed on the source.
+        unreplayed: How many directory and file moves a remote destination
+            cannot replay. When either is non-zero, a second note says they
+            are listed as deleted and created.
 
     Returns:
         The preview text, ending in a newline.
@@ -212,6 +245,14 @@ def _format_preview(
             lines.append(
                 "the last backup; --dry-run shows every file rsync will copy or delete."
             )
+    if any(unreplayed):
+        lines.append(
+            f"=== Remote destination: {_moves_text(*unreplayed)} cannot be replayed ==="
+        )
+        lines.append(
+            "They are listed below as deleted and created: rsync deletes them on the"
+        )
+        lines.append("backup and sends them again.")
     lines.append(f"=== Directory moves ({len(changes.dir_moves)}) ===")
     for o, n in changes.dir_moves:
         lines.append(f"  {display_name(o)}  ->  {display_name(n)}")
@@ -429,10 +470,13 @@ def _show_preview(
     interactive: bool,
     unexcluded: Sequence[str] = (),
     checked: bool = False,
+    unreplayed: tuple[int, int] = (0, 0),
 ) -> None:
     """Render the change preview, paging through ``less`` if interactive."""
     _emit_preview(
-        _format_preview(changes, unexcluded=unexcluded, checked=checked),
+        _format_preview(
+            changes, unexcluded=unexcluded, checked=checked, unreplayed=unreplayed
+        ),
         interactive=interactive,
     )
 
@@ -444,22 +488,22 @@ def _plan_changes(
     exclude_dirs: Sequence[str],
     no_exclude: bool,
     destination: Destination | None,
-) -> tuple[Changes, list[Row]]:
+) -> tuple[Changes, list[Row], tuple[int, int]]:
     """Diff the baseline against the fresh snapshot, asking the backup where needed.
 
     A baseline row under a default-excluded name says what the source had,
     not what the backup holds, since a run with the excludes never copies
-    those names. For a local destination such a row enters the diff only as
-    far as the destination confirms it (AD-36):
+    those names. Such a row enters the diff only as far as the destination
+    confirms it (AD-36):
 
     - a run with the excludes changes nothing under those names, so it asks
       only about a file that has moved out of one, and keeps the row when
       the backup holds that file, which makes it a file move;
     - a ``--no-exclude`` run syncs those names, so it asks about every such
-      row and diffs against what the backup holds.
-
-    A remote destination cannot be examined: its runs diff only what rsync
-    transfers, as before (AD-32).
+      row and diffs against what the backup holds;
+    - a remote destination can be neither examined nor renamed on (AD-37):
+      the lists leave those names to rsync and claim no moves, so an entry
+      whose path changed is listed as deleted and created.
 
     Args:
         before_rows: The baseline's rows.
@@ -469,18 +513,25 @@ def _plan_changes(
         destination: Where to look, or None for a remote destination.
 
     Returns:
-        ``(changes, before)``: the diff, and the baseline rows it was
-        computed against, which the >50% guard counts deletions against.
+        ``(changes, before, unreplayed)``: the diff; the baseline rows it
+        was computed against, which the >50% guard counts deletions
+        against; and how many directory and file moves a remote destination
+        cannot replay (``(0, 0)`` for a local one).
 
     Raises:
         DestinationUnreadable: If the destination cannot be examined.
     """
     skipped = exclude_matcher([] if no_exclude else exclude_dirs)
+    unvouched = exclude_matcher(exclude_dirs)
+    trusted, hints = split_hints(before_rows, unvouched)
     after = [r for r in fresh_rows if not skipped(r["path"])]
     if destination is None:
-        before = [r for r in before_rows if not skipped(r["path"])]
-        return compute_changes(before, after), before
-    trusted, hints = split_hints(before_rows, exclude_matcher(exclude_dirs))
+        after = [r for r in after if not unvouched(r["path"])]
+        changes = compute_changes(trusted, after)
+        unreplayed = (len(changes.dir_moves), len(changes.file_moves))
+        if any(unreplayed):
+            changes = compute_changes(trusted, after, detect_moves=False)
+        return changes, trusted, unreplayed
     if no_exclude:
         # No hints, no lookup: with an empty exclude list a run that has
         # nothing to do must still leave the backup drive alone (AD-2).
@@ -490,7 +541,7 @@ def _plan_changes(
         candidates = moved_out_candidates(hints, trusted, after)
         seen = destination.look([r["path"] for r in candidates]) if candidates else {}
         before = trusted + [r for r in candidates if holds(r, seen[r["path"]])]
-    return compute_changes(before, after), before
+    return compute_changes(before, after), before, (0, 0)
 
 
 def _confirm_or_abort(args: argparse.Namespace) -> bool:
@@ -874,6 +925,7 @@ def _run_backup_for_endpoints(
     destination: Destination | None = (
         LocalDestination(dest_root) if dest_root is not None else None
     )
+    unreplayed = (0, 0)
     if have_before:
         # Diff only what rsync transfers. A move into an excluded directory,
         # such as a file sent to the desktop trash, is then a deletion from
@@ -883,7 +935,7 @@ def _run_backup_for_endpoints(
         # against, so the >50% guard below counts deletions against the
         # same tree.
         try:
-            changes, before_rows = _plan_changes(
+            changes, before_rows, unreplayed = _plan_changes(
                 before_rows,
                 fresh_rows,
                 exclude_dirs=options.exclude_dirs,
@@ -899,6 +951,12 @@ def _run_backup_for_endpoints(
                 e.reason,
             )
             return EXIT_REFUSED
+        if any(unreplayed):
+            logging.warning(
+                "The destination is remote, so %s cannot be replayed there: "
+                "rsync deletes them on the backup and sends them again.",
+                _moves_text(*unreplayed),
+            )
         logging.info(
             "Diff: %d dir moves, %d file moves, %d modified, %d created, %d deleted.",
             len(changes.dir_moves),
@@ -930,10 +988,11 @@ def _run_backup_for_endpoints(
                     "Refusing: diff would delete %d of %d previously-recorded "
                     "entries (%.0f%%). This usually means the source tree has "
                     "been swapped, the snapshot is from a different tree, or "
-                    "args were reversed. Pass --allow-massive-delete to override.",
+                    "args were reversed.%s Pass --allow-massive-delete to override.",
                     len(changes.deleted),
                     len(before_rows),
                     ratio * 100,
+                    _REMOTE_RENAME_COUNTS if any(unreplayed) else "",
                 )
                 return EXIT_REFUSED
 
@@ -1010,6 +1069,7 @@ def _run_backup_for_endpoints(
             interactive=not args.yes,
             unexcluded=unexcluded,
             checked=destination is not None,
+            unreplayed=unreplayed,
         )
     else:
         _emit_preview(

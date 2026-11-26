@@ -567,3 +567,19 @@ def test_help_renders_on_an_ascii_only_stdout():
     from irsync.cli import _build_parser
 
     assert _build_parser().format_help().isascii()
+
+
+def test_help_says_the_replay_needs_a_local_destination():
+    # Behavior: the description says where moves are replayed and what
+    # happens to a moved file where they are not.
+    # Bug caught: the help promised the replay for every destination, but
+    # a remote one never gets it: a renamed file is deleted there and sent
+    # again (2026-11-25 design, case 5).
+    from irsync.cli import _build_parser
+
+    description = " ".join(str(_build_parser().description).split())
+    assert (
+        "The replay needs a local destination: a remote destination "
+        "(host:/path) cannot be renamed on yet, so a moved file is deleted "
+        "there and sent again."
+    ) in description

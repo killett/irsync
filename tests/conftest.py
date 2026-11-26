@@ -3,6 +3,7 @@
 import argparse
 import os
 import random
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -191,3 +192,51 @@ def tree_signature(root: Path) -> dict[str, tuple[int, bytes]]:
 
 def inode_for(path: Path) -> int:
     return path.stat().st_ino
+
+
+_STAND_IN_SSH = """#!/bin/sh
+# Stand-in for ssh in tests: drop the options and the host name, then run
+# the remote command on this machine through a shell, as sshd would.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p|-i|-l|-o) shift 2 ;;
+    -*) shift ;;
+    *) shift; break ;;
+  esac
+done
+exec sh -c "$*"
+"""
+
+
+@pytest.fixture
+def remote_host(tmp_path, monkeypatch):
+    """Make ``<host>:/path`` reach this machine, and return the host name.
+
+    Puts a stand-in ``ssh`` first on ``PATH``, so rsync treats the
+    destination as remote while the "remote" rsync runs locally. irsync sees
+    a remote destination (a string, never a ``Path``), which is the code
+    path under test. Skips when this rsync cannot be driven that way, rather
+    than failing for a reason that has nothing to do with irsync.
+    """
+    bindir = tmp_path / "stand-in-bin"
+    bindir.mkdir()
+    ssh = bindir / "ssh"
+    ssh.write_text(_STAND_IN_SSH)
+    ssh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    probe_src = tmp_path / "ssh-probe-src"
+    probe_src.mkdir()
+    (probe_src / "probe").write_text("probe")
+    probe_dest = tmp_path / "ssh-probe-dest"
+    result = subprocess.run(
+        ["rsync", "-a", "-e", "ssh", f"{probe_src}/", f"standin:{probe_dest}/"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not (probe_dest / "probe").is_file():
+        pytest.skip(
+            "this rsync cannot be driven through the stand-in ssh: "
+            f"{result.stderr.strip()}"
+        )
+    return "standin"
