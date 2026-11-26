@@ -13,6 +13,8 @@ import tempfile
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
+from irsync.baseline import checked_rows, split_hints
+from irsync.destination import Destination, DestinationUnreadable, LocalDestination
 from irsync.diff import Changes, compute_changes
 from irsync.display import display_name
 from irsync.options import Endpoints, Options, resolve_endpoints, resolve_source
@@ -31,7 +33,7 @@ from irsync.preflight import (
     split_top_level,
     top_level_names,
 )
-from irsync.replay import CrossDeviceMoveError, apply_moves
+from irsync.replay import CrossDeviceMoveError
 from irsync.rsync_runner import (
     build_rsync_command,
     exclude_matcher,
@@ -159,7 +161,9 @@ def _persist_snapshots(rows: list[Row], src_root: Path, dest_root: Path | None) 
     _atomic_write_snapshot(rows, src_root, src_root / SNAPSHOT_FILENAME)
 
 
-def _format_preview(changes: Changes, *, unexcluded: Sequence[str] = ()) -> str:
+def _format_preview(
+    changes: Changes, *, unexcluded: Sequence[str] = (), checked: bool = False
+) -> str:
     """Build the full pre-confirmation preview text — every move, deletion, creation.
 
     The deletion list is the safety-critical part: rsync's ``--delete-before`` will
@@ -171,9 +175,12 @@ def _format_preview(changes: Changes, *, unexcluded: Sequence[str] = ()) -> str:
     Args:
         changes: The snapshot diff to list.
         unexcluded: The default exclude patterns this run does not apply
-            (``--no-exclude``). When non-empty, a note opens the preview:
-            rsync also syncs those names on the backup, copying and deleting
-            files the lists do not show.
+            (``--no-exclude``). When non-empty, a note opens the preview
+            saying that rsync also syncs those names on the backup.
+        checked: Whether the lists cover those names, checked against the
+            backup (a local destination). The note then names the one thing
+            the lists cannot show; otherwise it says they show only what
+            changed on the source.
 
     Returns:
         The preview text, ending in a newline.
@@ -181,15 +188,30 @@ def _format_preview(changes: Changes, *, unexcluded: Sequence[str] = ()) -> str:
     lines: list[str] = []
     if unexcluded:
         lines.append(f"=== --no-exclude: rsync also syncs {', '.join(unexcluded)} ===")
-        lines.append(
-            "On the backup, rsync makes these match the source, copying and DELETING"
-        )
-        lines.append(
-            "files there. The lists below show only what changed on the source since"
-        )
-        lines.append(
-            "the last backup; --dry-run shows every file rsync will copy or delete."
-        )
+        if checked:
+            lines.append(
+                "The lists below cover these names too, checked against the backup. "
+                "They"
+            )
+            lines.append(
+                "cannot show one thing: a file there that only the backup has and no "
+                "earlier"
+            )
+            lines.append(
+                "run recorded, which rsync DELETES. --dry-run shows every file."
+            )
+        else:
+            lines.append(
+                "On the backup, rsync makes these match the source, copying and "
+                "DELETING"
+            )
+            lines.append(
+                "files there. The lists below show only what changed on the source "
+                "since"
+            )
+            lines.append(
+                "the last backup; --dry-run shows every file rsync will copy or delete."
+            )
     lines.append(f"=== Directory moves ({len(changes.dir_moves)}) ===")
     for o, n in changes.dir_moves:
         lines.append(f"  {display_name(o)}  ->  {display_name(n)}")
@@ -402,12 +424,61 @@ def _emit_preview(text: str, *, interactive: bool) -> None:
 
 
 def _show_preview(
-    changes: Changes, *, interactive: bool, unexcluded: Sequence[str] = ()
+    changes: Changes,
+    *,
+    interactive: bool,
+    unexcluded: Sequence[str] = (),
+    checked: bool = False,
 ) -> None:
     """Render the change preview, paging through ``less`` if interactive."""
     _emit_preview(
-        _format_preview(changes, unexcluded=unexcluded), interactive=interactive
+        _format_preview(changes, unexcluded=unexcluded, checked=checked),
+        interactive=interactive,
     )
+
+
+def _plan_changes(
+    before_rows: list[Row],
+    fresh_rows: list[Row],
+    *,
+    exclude_dirs: Sequence[str],
+    no_exclude: bool,
+    destination: Destination | None,
+) -> tuple[Changes, list[Row]]:
+    """Diff the baseline against the fresh snapshot, asking the backup where needed.
+
+    A baseline row under a default-excluded name says what the source had,
+    not what the backup holds, since a run with the excludes never copies
+    those names. A ``--no-exclude`` run to a local destination syncs those
+    names, so it asks the destination about every such row and diffs
+    against what the backup holds (AD-36). Every other run diffs only what
+    rsync transfers, as before (AD-32).
+
+    Args:
+        before_rows: The baseline's rows.
+        fresh_rows: The source's fresh snapshot rows.
+        exclude_dirs: The default exclude patterns.
+        no_exclude: Whether rsync syncs the excluded names in this run.
+        destination: Where to look, or None for a remote destination.
+
+    Returns:
+        ``(changes, before)``: the diff, and the baseline rows it was
+        computed against, which the >50% guard counts deletions against.
+
+    Raises:
+        DestinationUnreadable: If the destination cannot be examined.
+    """
+    skipped = exclude_matcher([] if no_exclude else exclude_dirs)
+    after = [r for r in fresh_rows if not skipped(r["path"])]
+    if no_exclude and destination is not None:
+        trusted, hints = split_hints(before_rows, exclude_matcher(exclude_dirs))
+        # No hints, no lookup: with an empty exclude list a run that has
+        # nothing to do must still leave the backup drive alone (AD-2).
+        seen = destination.look([r["path"] for r in hints]) if hints else {}
+        before = trusted + checked_rows(hints, seen)
+    else:
+        before = [r for r in before_rows if not skipped(r["path"])]
+    return compute_changes(before, after), before
 
 
 def _confirm_or_abort(args: argparse.Namespace) -> bool:
@@ -787,16 +858,35 @@ def _run_backup_for_endpoints(
     # copied these, so the backup can lack them however unchanged the source
     # is, and rsync syncs them without the diff showing it.
     unexcluded = options.exclude_dirs if args.no_exclude else []
+    # Where the backup can be examined and renamed on; None for a remote one.
+    destination: Destination | None = (
+        LocalDestination(dest_root) if dest_root is not None else None
+    )
     if have_before:
         # Diff only what rsync transfers. A move into an excluded directory,
         # such as a file sent to the desktop trash, is then a deletion from
         # the backup instead of a move replayed where --delete-before never
-        # reaches it. before_rows is narrowed too, so the >50% guard below
-        # counts deletions against the same tree.
-        before_rows = [r for r in before_rows if not excluded(r["path"])]
-        changes = compute_changes(
-            before_rows, [r for r in fresh_rows if not excluded(r["path"])]
-        )
+        # reaches it. Under an excluded name the backup is asked what it
+        # holds (AD-36). before_rows becomes the rows the diff was computed
+        # against, so the >50% guard below counts deletions against the
+        # same tree.
+        try:
+            changes, before_rows = _plan_changes(
+                before_rows,
+                fresh_rows,
+                exclude_dirs=options.exclude_dirs,
+                no_exclude=args.no_exclude,
+                destination=destination,
+            )
+        except DestinationUnreadable as e:
+            logging.error(
+                "Refusing: cannot read the backup at %s (%s). irsync checks what "
+                "the backup holds there before it lists any change; nothing has "
+                "been written to it.",
+                display_name(e.path),
+                e.reason,
+            )
+            return EXIT_REFUSED
         logging.info(
             "Diff: %d dir moves, %d file moves, %d modified, %d created, %d deleted.",
             len(changes.dir_moves),
@@ -903,7 +993,12 @@ def _run_backup_for_endpoints(
     # through less so the user can scroll through the deletion list. In --yes
     # mode, dump it once so the run is at least auditable in scrollback / logs.
     if changes is not None:
-        _show_preview(changes, interactive=not args.yes, unexcluded=unexcluded)
+        _show_preview(
+            changes,
+            interactive=not args.yes,
+            unexcluded=unexcluded,
+            checked=destination is not None,
+        )
     else:
         _emit_preview(
             _format_first_run_preview(
@@ -948,12 +1043,10 @@ def _run_backup_for_endpoints(
         _cleanup_orphan_tempfiles(dest_root)
 
     # Apply moves on dest tree first (only if we have a local dest and a diff).
-    if changes is not None and dest_root is not None:
+    if changes is not None and destination is not None:
         try:
-            result = apply_moves(
-                dir_moves=changes.dir_moves,
-                file_moves=changes.file_moves,
-                dest_root=dest_root,
+            result = destination.replay(
+                dir_moves=changes.dir_moves, file_moves=changes.file_moves
             )
         except CrossDeviceMoveError as e:
             # NEW-H2 (5th-pass). Refuse upfront so we don't leave dest in

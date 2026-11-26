@@ -128,6 +128,28 @@ class TestFormatPreview:
         # skip it, and would be false for a run that keeps the excludes.
         assert _format_preview(Changes()).startswith("=== Directory moves (0) ===")
 
+    def test_checked_lists_get_the_note_that_names_what_they_cannot_show(self):
+        # Behavior: when the lists cover the excluded names, checked
+        # against the backup, the note says so and names the one thing
+        # they cannot show.
+        # Bug caught: the earlier note ("the lists show only what changed
+        # on the source") would be false for such a run.
+        # Expected values: the note's text in the 2026-11-25 design,
+        # section 2; its first line is unchanged.
+        lines = _format_preview(
+            Changes(),
+            unexcluded=[".Trash-*", ".cache", "unfinished_downloads"],
+            checked=True,
+        ).splitlines()
+        assert lines[:5] == [
+            "=== --no-exclude: rsync also syncs .Trash-*, .cache, "
+            "unfinished_downloads ===",
+            "The lists below cover these names too, checked against the backup. They",
+            "cannot show one thing: a file there that only the backup has and no earlier",
+            "run recorded, which rsync DELETES. --dry-run shows every file.",
+            "=== Directory moves (0) ===",
+        ]
+
 
 class TestPreviewNamesSurviveStrictOutput:
     def test_moved_non_utf8_file_does_not_crash_a_yes_run(self, tmp_path):
@@ -860,7 +882,7 @@ class TestCrossDeviceReplayHandled:
         def always_refuse(*, dir_moves, file_moves, dest_root):
             raise CrossDeviceMoveError(18, "simulated EXDEV from pre-flight")
 
-        monkeypatch.setattr("irsync.backup.apply_moves", always_refuse)
+        monkeypatch.setattr("irsync.destination.apply_moves", always_refuse)
         # Capture rsync to make sure it doesn't run after the refusal.
         rsync_calls: list[list[str]] = []
         monkeypatch.setattr(
@@ -916,7 +938,7 @@ class TestProvenanceMismatchRejected:
         # (because the provenance mismatch falls back to "first backup"),
         # not that apply_moves replayed the wrong moves.
         replays: list[tuple] = []
-        from irsync import backup as backup_mod
+        from irsync import destination as destination_mod
         from irsync.replay import apply_moves as real_apply_moves
 
         def recording_apply(*, dir_moves, file_moves, dest_root):
@@ -925,7 +947,7 @@ class TestProvenanceMismatchRejected:
                 dir_moves=dir_moves, file_moves=file_moves, dest_root=dest_root
             )
 
-        monkeypatch.setattr(backup_mod, "apply_moves", recording_apply)
+        monkeypatch.setattr(destination_mod, "apply_moves", recording_apply)
 
         rc = run_backup(
             source_arg=str(src_b),
@@ -2732,11 +2754,14 @@ class TestNoExcludeReachesRsync:
         self, tmp_path, basic_options, caplog, capsys
     ):
         # Behavior: on an unchanged source, --no-exclude still runs rsync,
-        # says why, and copies every excluded file to the backup.
+        # lists what the backup lacks under the excluded names as created,
+        # and copies every excluded file to the backup.
         # Bug caught: the no-change short-circuit returned first, so the run
         # logged "backup drive untouched" and copied nothing.
         # Expected values: the hand-built source tree; every file in it must
-        # now be on the backup, beside the backup's snapshot copy.
+        # now be on the backup, beside the backup's snapshot copy. Created:
+        # the 3 skipped files and the 4 folders that hold them (.Trash-1000,
+        # .Trash-1000/files, Films/.cache, unfinished_downloads).
         src, dest = self._baselined(tmp_path, basic_options)
         capsys.readouterr()
 
@@ -2745,10 +2770,9 @@ class TestNoExcludeReachesRsync:
 
         assert rc == 0
         assert (
-            "No source changes since last backup, but --no-exclude: running "
-            "rsync anyway so the backup gets what the default excludes skip "
-            "(.Trash-*, .cache, unfinished_downloads)."
-        ) in caplog.messages
+            "Diff: 0 dir moves, 0 file moves, 0 modified, 7 created, 0 deleted."
+            in caplog.messages
+        )
         assert sorted(tree_signature(dest)) == sorted(
             [SNAPSHOT_FILENAME, "Films/a.mkv", *self.SKIPPED]
         )
