@@ -53,12 +53,12 @@
     {
       "id": 7,
       "subject": "Task 7: Record the decisions in the docs",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The architecture doc, README, `PROGRESS.md` and the spec describe what the code now does: AD-36, AD-37 and AD-38, the decisions they amend, the module and test tables, and the test total.\n\n**Files:**\n- Modify: `docs/design/irsync-architecture.md`\n- Modify: `README.md`\n- Modify: `PROGRESS.md`\n- Modify: `docs/superpowers/specs/2026-11-25-excluded-names-backup-truth-design.md` (the Status line)\n\n**Acceptance Criteria:**\n- [ ] `docs/design/irsync-architecture.md` has sections 36, 37 and 38 with the text in this task, the amended sentences in AD-2, AD-6, AD-9, AD-32 and AD-35, the algorithm section, both module rows, the four test-file rows, and a test total of 510.\n- [ ] `README.md` says the replay needs a local backup, has the two new Safety bullets, and lists `destination.py` and `baseline.py`.\n- [ ] `PROGRESS.md` lists AD-36, AD-37 and AD-38, points Current work at the branch and this plan, and has the two new gotchas.\n- [ ] The spec's Status line says it is implemented on branch `ask-the-backup`.\n- [ ] No source or test file changes; `pixi run test -q` still ends with `509 passed, 1 skipped`.\n\n**Verify:** `rg -n '^### 3[678]\\.' docs/design/irsync-architecture.md` → three headings; `rg -c 'AD-3[678]' PROGRESS.md` → at least 3; `rg -n 'destination.py|baseline.py' README.md` → both listed\n\n```json:metadata\n{\"files\": [\"docs/design/irsync-architecture.md\", \"README.md\", \"PROGRESS.md\", \"docs/superpowers/specs/2026-11-25-excluded-names-backup-truth-design.md\"], \"verifyCommand\": \"rg -n '^### 3[678]\\\\.' docs/design/irsync-architecture.md && rg -c 'AD-3[678]' PROGRESS.md && rg -n 'destination.py|baseline.py' README.md\", \"acceptanceCriteria\": [\"docs/design/irsync-architecture.md has sections 36, 37 and 38 with the text in this task, the amended sentences in AD-2, AD-6, AD-9, AD-32 and AD-35, the algorithm section, both module rows, the four test-file rows, and a test total of 510\", \"README.md says the replay needs a local backup, has the two new Safety bullets, and lists destination.py and baseline.py\", \"PROGRESS.md lists AD-36, AD-37 and AD-38, points Current work at the branch and this plan, and has the two new gotchas\", \"The spec's Status line says it is implemented on branch ask-the-backup\", \"No source or test file changes; pixi run test -q still ends with 509 passed, 1 skipped\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         6
       ]
     }
   ],
-  "lastUpdated": "2026-11-26T07:53:45Z"
+  "lastUpdated": "2026-11-26T08:02:24Z"
 }
