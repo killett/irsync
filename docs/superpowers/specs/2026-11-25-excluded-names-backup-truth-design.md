@@ -1,8 +1,8 @@
 # Design: list a move only when the backup can make it
 
 Date: 2026-11-25
-Status: design approved section by section (owner, 2026-11-25); awaiting the
-owner's review of this file; not yet implemented
+Status: approved (brainstorm and the owner's review of this file,
+2026-11-25); not yet implemented
 
 ## Problem
 
