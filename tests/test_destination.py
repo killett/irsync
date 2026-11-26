@@ -76,18 +76,26 @@ class TestLook:
         # Bug caught: following the link would report a file outside the
         # backup as held there, and a move would be planned from a place
         # the replay refuses to touch (AD-9).
-        # Expected values: victim.txt really exists through the link, so
+        # A real folder behind the link (link/sub) catches a check of the
+        # immediate parent alone: lstat follows a symlink anywhere but in
+        # the last component, so "sub" looks like a real folder.
+        # Expected values: both victims really exist through the link, so
         # only "not followed" can explain None.
         root = tmp_path / "backup"
         root.mkdir()
         outside = tmp_path / "outside"
         _file(outside / "victim.txt")
+        _file(outside / "sub" / "victim.txt")
         os.symlink(outside, root / "link")
         assert (root / "link" / "victim.txt").is_file()
+        assert (root / "link" / "sub" / "victim.txt").is_file()
 
-        seen = LocalDestination(root).look(["link/victim.txt", "link"])
+        seen = LocalDestination(root).look(
+            ["link/victim.txt", "link/sub/victim.txt", "link"]
+        )
 
         assert seen["link/victim.txt"] is None
+        assert seen["link/sub/victim.txt"] is None
         there = seen["link"]
         assert there is not None and there.type == "l"
 

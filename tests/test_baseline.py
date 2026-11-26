@@ -216,6 +216,23 @@ class TestCheckedRows:
 
         assert checked_rows([folder, child], seen) == []
 
+    def test_a_path_the_answer_leaves_out_raises(self):
+        # Behavior: every hint's path must have an answer; a missing one is
+        # a failure, not "nothing there".
+        # Bug caught: reading the answer with seen.get() turned a partial
+        # reply (a cut-off answer from the coming ssh helper) into "the
+        # backup lacks it": the hint was dropped silently and its file
+        # listed as created, or a deletion on the backup left unlisted.
+        # Expected values: the one path the answer leaves out, as the
+        # KeyError's argument.
+        other = _row(ino=8, path="unfinished_downloads/other.mkv")
+        seen = {self.HINT: Seen(type="f", size=10, mtime_ns=_T)}
+
+        with pytest.raises(KeyError) as excinfo:
+            checked_rows([self._hint(), other], seen)
+
+        assert excinfo.value.args == ("unfinished_downloads/other.mkv",)
+
 
 class TestMovedOutCandidates:
     HINT = _row(ino=7, path="unfinished_downloads/ep.mkv")

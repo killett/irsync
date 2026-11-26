@@ -81,14 +81,21 @@ def checked_rows(hints: Iterable[Row], seen: Mapping[str, Seen | None]) -> list[
 
     Args:
         hints: Baseline rows under a default-excluded name.
-        seen: The destination's answer for each hint's path.
+        seen: The destination's answer for each hint's path, as
+            :meth:`~irsync.destination.Destination.look` returns it.
 
     Returns:
         The rows to put on the diff's "before" side, in the hints' order.
+
+    Raises:
+        KeyError: If ``seen`` has no entry for a hint's path. A partial
+            answer must fail loudly: read as "nothing there", it would drop
+            the hint and list its file as created, or leave a deletion on
+            the backup unlisted.
     """
     out: list[Row] = []
     for row in hints:
-        there = seen.get(row["path"])
+        there = seen[row["path"]]
         if there is None:
             continue
         if holds(row, there):

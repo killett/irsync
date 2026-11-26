@@ -137,19 +137,28 @@ class LocalDestination:
         # Resolved once, so a symlink on the way to the root (a symlinked
         # mount point) is fine while one below it is not followed.
         root = self._root.resolve()
-        stats: dict[str, os.stat_result | None] = {}
+        # Only what the answer needs is kept per path, not the whole
+        # os.stat_result: a first --no-exclude run can ask about a million
+        # rows under a cache folder.
+        examined: dict[str, Seen | None] = {}
         real_dir: dict[str, bool] = {"": True}
 
-        def lstat(rel: str) -> os.stat_result | None:
-            if rel not in stats:
+        def lstat(rel: str) -> Seen | None:
+            if rel not in examined:
                 path = root / PurePosixPath(rel)
                 try:
-                    stats[rel] = os.lstat(path)
+                    st = os.lstat(path)
                 except (FileNotFoundError, NotADirectoryError):
-                    stats[rel] = None
+                    examined[rel] = None
                 except OSError as e:
                     raise DestinationUnreadable(str(path), e.strerror or str(e)) from e
-            return stats[rel]
+                else:
+                    examined[rel] = Seen(
+                        type=_type_of(st.st_mode),
+                        size=st.st_size,
+                        mtime_ns=st.st_mtime_ns,
+                    )
+            return examined[rel]
 
         def is_real_dir(rel_dir: str) -> bool:
             # Walk up to the nearest directory already judged, then judge
@@ -163,22 +172,15 @@ class LocalDestination:
             ok = real_dir[d]
             for p in reversed(pending):
                 if ok:
-                    st = lstat(p)
-                    ok = st is not None and stat.S_ISDIR(st.st_mode)
+                    there = lstat(p)
+                    ok = there is not None and there.type == "d"
                 real_dir[p] = ok
             return ok
 
-        seen: dict[str, Seen | None] = {}
-        for rel in wanted:
-            st = lstat(rel) if is_real_dir(rel.rpartition("/")[0]) else None
-            seen[rel] = (
-                None
-                if st is None
-                else Seen(
-                    type=_type_of(st.st_mode), size=st.st_size, mtime_ns=st.st_mtime_ns
-                )
-            )
-        return seen
+        return {
+            rel: lstat(rel) if is_real_dir(rel.rpartition("/")[0]) else None
+            for rel in wanted
+        }
 
     def replay(
         self,
