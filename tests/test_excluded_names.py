@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from irsync.backup import EXIT_REFUSED, run_backup
+from irsync.destination import LocalDestination
 from irsync.snapshot import SNAPSHOT_FILENAME
 
 from .conftest import cli_args as _args
@@ -55,6 +56,11 @@ def _make_stale(path: Path) -> None:
     """Turn a backup copy into an older, shorter one, as a partial download is."""
     path.write_text("partial")
     os.utime(path, ns=(1_600_000_000 * 10**9, 1_600_000_000 * 10**9))
+
+
+def _listed(text: str) -> list[str]:
+    """Return the preview's modified, created and deleted lines."""
+    return [ln for ln in text.splitlines() if ln[:4] in ("  ~ ", "  + ", "  - ")]
 
 
 class TestNoExcludeRun:
@@ -349,3 +355,151 @@ class TestNoExcludeRun:
             "(.Trash-*, .cache, unfinished_downloads)."
         ) in caplog.messages
         assert not (dest / DL / "stray.part").exists()
+
+
+class TestRunWithTheExcludes:
+    """An ordinary run can only take a file out of an excluded name."""
+
+    def test_a_file_the_backup_holds_is_moved_out_with_nothing_sent(
+        self, tmp_path, basic_options, caplog
+    ):
+        # Behavior (reproduced case 3): the backup's copy under the
+        # excluded name is renamed to the file's new place.
+        # Bug caught: the file was listed as created and sent in full,
+        # and the old copy stayed, so the backup held it twice.
+        # Expected values: the copy keeps its inode, which only a rename
+        # does; nothing is left at the old path.
+        src, dest = _tree(tmp_path, f"{DL}/ep.mkv", "finished/other.txt", "keep")
+        assert _backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
+        copy_inode = inode_for(dest / DL / "ep.mkv")
+        (src / DL / "ep.mkv").rename(src / "finished" / "ep.mkv")
+
+        rc, diffs = _backup(src, dest, basic_options, caplog)
+
+        assert rc == 0
+        assert diffs == [
+            "Diff: 0 dir moves, 1 file moves, 0 modified, 0 created, 0 deleted."
+        ]
+        assert inode_for(dest / "finished" / "ep.mkv") == copy_inode
+        assert not (dest / DL / "ep.mkv").exists()
+
+    def test_a_stale_copy_is_left_alone_and_the_file_is_sent(
+        self, tmp_path, basic_options, caplog
+    ):
+        # Behavior: a copy that is not the file the source has now is not
+        # used; the file is created, and the run changes nothing under the
+        # excluded name. Passes before this change too.
+        # Bug caught: a rescue that only checked that something exists at
+        # the old path would rename the stale copy and list a move rsync
+        # then has to re-send.
+        # Expected values: the stale copy keeps its place and content.
+        src, dest = _tree(tmp_path, f"{DL}/ep.mkv", "finished/other.txt", "keep")
+        assert _backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
+        _make_stale(dest / DL / "ep.mkv")
+        (src / DL / "ep.mkv").rename(src / "finished" / "ep.mkv")
+
+        rc, diffs = _backup(src, dest, basic_options, caplog)
+
+        assert rc == 0
+        assert diffs == [
+            "Diff: 0 dir moves, 0 file moves, 0 modified, 1 created, 0 deleted."
+        ]
+        assert (dest / "finished" / "ep.mkv").read_text() == f"{DL}/ep.mkv"
+        assert (dest / DL / "ep.mkv").read_text() == "partial"
+
+    def test_a_folder_moved_out_is_handled_file_by_file(
+        self, tmp_path, basic_options, caplog
+    ):
+        # Behavior: the folder arrives as a new folder; each file the
+        # backup holds is moved into it, the others are sent; whatever
+        # else the backup has in the old folder stays where it is.
+        # Bug caught: renaming the whole folder would carry leftover.part
+        # into the synced tree, where rsync deletes it without the preview
+        # having listed it.
+        # Expected values: hand count. Created: finished/Pack, e2 (stale
+        # on the backup) and e3 (missing there); e1 is the one move.
+        pack = f"{DL}/Pack"
+        src, dest = _tree(
+            tmp_path, f"{pack}/e1", f"{pack}/e2", f"{pack}/e3", "finished/other.txt"
+        )
+        assert _backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
+        e1_inode = inode_for(dest / pack / "e1")
+        _make_stale(dest / pack / "e2")
+        (dest / pack / "e3").unlink()
+        _write(dest / pack / "leftover.part", "only on the backup")
+        (src / pack).rename(src / "finished" / "Pack")
+
+        rc, diffs = _backup(src, dest, basic_options, caplog)
+
+        assert rc == 0
+        assert diffs == [
+            "Diff: 0 dir moves, 1 file moves, 0 modified, 3 created, 0 deleted."
+        ]
+        moved = dest / "finished" / "Pack"
+        assert inode_for(moved / "e1") == e1_inode
+        assert (moved / "e2").read_text() == f"{pack}/e2"
+        assert (moved / "e3").read_text() == f"{pack}/e3"
+        assert sorted(p.name for p in moved.iterdir()) == ["e1", "e2", "e3"]
+        assert (dest / pack / "leftover.part").read_text() == "only on the backup"
+        assert (dest / pack / "e2").read_text() == "partial"
+
+    def test_nothing_under_an_excluded_name_is_listed(
+        self, tmp_path, basic_options, caplog, capsys
+    ):
+        # Behavior: a run with the excludes changes nothing under an
+        # excluded name, so its lists name no path there. Passes before
+        # this change too.
+        # Bug caught: admitting the row of a file that was edited and then
+        # moved out would list its old path as deleted.
+        # Expected values: one creation (the edited file at its new
+        # place); the deleted partial download is not the backup's
+        # business in this run.
+        src, dest = _tree(tmp_path, f"{DL}/a.part", f"{DL}/b.part", "docs/keep")
+        assert _backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
+        _write(src / DL / "a.part", "finished downloading")
+        (src / DL / "a.part").rename(src / "docs" / "a.mkv")
+        (src / DL / "b.part").unlink()
+        capsys.readouterr()
+
+        rc, diffs = _backup(src, dest, basic_options, caplog)
+
+        assert rc == 0
+        assert diffs == [
+            "Diff: 0 dir moves, 0 file moves, 0 modified, 1 created, 0 deleted."
+        ]
+        assert _listed(capsys.readouterr().out) == ["  + docs/a.mkv"]
+
+    @pytest.mark.parametrize(
+        "change",
+        ["nothing", "inside-the-excluded-folder", "elsewhere"],
+    )
+    def test_the_backup_is_not_looked_at_without_a_file_moved_out(
+        self, tmp_path, basic_options, caplog, monkeypatch, change
+    ):
+        # Behavior (AD-2): the backup is asked only when a file under an
+        # excluded name has turned up in the synced tree.
+        # Bug caught: asking on every run would wake the backup drive on a
+        # run that has nothing to do.
+        # Expected values: no lookup in any of the three cases; the first
+        # two also stop at the no-change short-circuit.
+        src, dest = _tree(tmp_path, f"{DL}/part", "docs/keep")
+        assert _backup(src, dest, basic_options, caplog, no_exclude=True)[0] == 0
+        if change == "inside-the-excluded-folder":
+            _write(src / DL / "part", "grown")
+        elif change == "elsewhere":
+            _write(src / "docs" / "new.txt", "new")
+        looked: list[list[str]] = []
+        monkeypatch.setattr(
+            LocalDestination,
+            "look",
+            lambda self, paths: looked.append(list(paths)) or {},
+        )
+
+        rc, _diffs = _backup(src, dest, basic_options, caplog)
+
+        assert rc == 0
+        assert looked == []
+        assert (
+            "No source changes since last backup; backup drive untouched."
+            in caplog.messages
+        ) is (change != "elsewhere")

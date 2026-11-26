@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
-from irsync.baseline import checked_rows, split_hints
+from irsync.baseline import checked_rows, holds, moved_out_candidates, split_hints
 from irsync.destination import Destination, DestinationUnreadable, LocalDestination
 from irsync.diff import Changes, compute_changes
 from irsync.display import display_name
@@ -449,10 +449,17 @@ def _plan_changes(
 
     A baseline row under a default-excluded name says what the source had,
     not what the backup holds, since a run with the excludes never copies
-    those names. A ``--no-exclude`` run to a local destination syncs those
-    names, so it asks the destination about every such row and diffs
-    against what the backup holds (AD-36). Every other run diffs only what
-    rsync transfers, as before (AD-32).
+    those names. For a local destination such a row enters the diff only as
+    far as the destination confirms it (AD-36):
+
+    - a run with the excludes changes nothing under those names, so it asks
+      only about a file that has moved out of one, and keeps the row when
+      the backup holds that file, which makes it a file move;
+    - a ``--no-exclude`` run syncs those names, so it asks about every such
+      row and diffs against what the backup holds.
+
+    A remote destination cannot be examined: its runs diff only what rsync
+    transfers, as before (AD-32).
 
     Args:
         before_rows: The baseline's rows.
@@ -470,14 +477,19 @@ def _plan_changes(
     """
     skipped = exclude_matcher([] if no_exclude else exclude_dirs)
     after = [r for r in fresh_rows if not skipped(r["path"])]
-    if no_exclude and destination is not None:
-        trusted, hints = split_hints(before_rows, exclude_matcher(exclude_dirs))
+    if destination is None:
+        before = [r for r in before_rows if not skipped(r["path"])]
+        return compute_changes(before, after), before
+    trusted, hints = split_hints(before_rows, exclude_matcher(exclude_dirs))
+    if no_exclude:
         # No hints, no lookup: with an empty exclude list a run that has
         # nothing to do must still leave the backup drive alone (AD-2).
         seen = destination.look([r["path"] for r in hints]) if hints else {}
         before = trusted + checked_rows(hints, seen)
     else:
-        before = [r for r in before_rows if not skipped(r["path"])]
+        candidates = moved_out_candidates(hints, trusted, after)
+        seen = destination.look([r["path"] for r in candidates]) if candidates else {}
+        before = trusted + [r for r in candidates if holds(r, seen[r["path"]])]
     return compute_changes(before, after), before
 
 
