@@ -42,7 +42,10 @@ irsync /mnt/data /mnt/data_backup --yes
 irsync /mnt/data /mnt/data_backup --yes --force
 
 # Also back up what is normally skipped (.Trash-*, .cache,
-# unfinished_downloads). This always runs rsync, changed or not.
+# unfinished_downloads). This always runs rsync, changed or not. To a
+# local backup the preview lists those names too, checked against the
+# backup, except a file there that only the backup has and the last run
+# did not record, which rsync deletes; --dry-run shows every file.
 irsync /mnt/data /mnt/data_backup --no-exclude
 
 # Take a baseline snapshot without backing up (e.g. before a big reorg).

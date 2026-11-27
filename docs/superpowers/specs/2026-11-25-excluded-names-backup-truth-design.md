@@ -158,20 +158,27 @@ folders alike.
   are still checked one by one: a matching one rides along with the folder,
   a missing one is created, a stale one is deleted and created.
 - Not listed: what the destination holds under those names that the
-  baseline has no row for. irsync cannot ask about a path it never
-  recorded. rsync deletes it; the preview's note shrinks to say exactly
-  that, and `--dry-run` still shows every file. For a local destination
-  the note (AD-35) becomes, its first line unchanged:
+  baseline has no row for. irsync cannot ask about a path the baseline
+  does not record, whether no run ever recorded it or a later run's
+  baseline dropped it. rsync deletes it; the preview's note shrinks to say
+  exactly that, and `--dry-run` still shows every file. For a local
+  destination the note (AD-35) becomes, its first line unchanged:
 
   ```
   === --no-exclude: rsync also syncs .Trash-*, .cache, unfinished_downloads ===
   The lists below cover these names too, checked against the backup. They
-  cannot show one thing: a file there that only the backup has and no earlier
-  run recorded, which rsync DELETES. --dry-run shows every file.
+  cannot show one thing: a file there that only the backup has and the last
+  run did not record, which rsync DELETES. --dry-run shows every file.
   ```
 
+  Amended 2026-11-26 (owner's approval, after the final review): the note
+  first said "no earlier run recorded". The baseline holds only the last
+  run's rows, so a file that an earlier `--no-exclude` run recorded and
+  copied, and that has since left the source, is deleted unlisted too
+  (reproduced with an emptied trash: 6 files, 0 listed as deleted).
+
 - Such a run still always reaches rsync (AD-35), because only rsync finds
-  what the baseline never recorded. When the diff is empty it still logs
+  what the baseline does not record. When the diff is empty it still logs
   "No source changes since last backup, but --no-exclude: running rsync
   anyway"; that now means the backup holds every recorded row.
 

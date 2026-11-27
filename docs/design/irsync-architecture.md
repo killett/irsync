@@ -700,7 +700,10 @@ so on an unchanged source whose backup lacks them they are listed as created
 and the "No source changes ... but --no-exclude" line is logged only when the
 backup already holds every recorded row. The note there keeps its first line
 and now names the one thing the lists cannot show: a file under those names
-that only the backup has and no earlier run recorded, which rsync deletes. The
+that only the backup has and the last run did not record, which rsync deletes.
+That includes a file an earlier `--no-exclude` run copied and that has since
+left the source, since the runs in between rewrote the baseline without it
+(the note first said "no earlier run recorded"; corrected 2026-11-26). The
 original note stays for a remote destination (AD-37).
 
 ### 36. Under an excluded name, the backup is asked
@@ -752,9 +755,9 @@ format is unchanged, and a row elsewhere stays trusted: it is what the last
 successful run synced.
 
 Not covered: a file renamed inside the excluded folder after the backup got it
-(one unneeded copy), and what the backup holds under those names that no
-baseline recorded (rsync deletes it under `--no-exclude`; the preview's note
-says so, AD-35). Rejected: diffing with the default excludes on both sides
+(one unneeded copy), and what the backup holds under those names that the
+baseline has no row for (rsync deletes it under `--no-exclude`; the preview's
+note says so, AD-35). Rejected: diffing with the default excludes on both sides
 whatever the flags (it copies what the backup already holds), recording the
 exclude list in the snapshot header (lost at the next run with the excludes),
 and carrying rows forward in the snapshot (a format change that cannot see
