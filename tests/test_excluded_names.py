@@ -360,8 +360,10 @@ class TestNoExcludeRun:
         # Behavior: for a local destination the note says the lists cover
         # the excluded names and names the one thing they cannot show.
         # Bug caught: the old note ("the lists show only what changed on
-        # the source") would now be false.
-        # Expected values: the note's text in the design's section 2.
+        # the source") would now be false, and so would "no earlier run
+        # recorded": the baseline holds only what the last run recorded.
+        # Expected values: the note's text in the design's section 2, as
+        # amended 2026-11-26.
         src, dest = _tree(tmp_path, f"{DL}/part", "keep")
         assert _backup(src, dest, basic_options, caplog)[0] == 0
         capsys.readouterr()
@@ -372,8 +374,8 @@ class TestNoExcludeRun:
         start = lines.index(NOTE_HEADER)
         assert lines[start + 1 : start + 4] == [
             "The lists below cover these names too, checked against the backup. They",
-            "cannot show one thing: a file there that only the backup has and no earlier",
-            "run recorded, which rsync DELETES. --dry-run shows every file.",
+            "cannot show one thing: a file there that only the backup has and the last",
+            "run did not record, which rsync DELETES. --dry-run shows every file.",
         ]
 
     def test_an_unchanged_source_whose_backup_holds_everything_still_runs_rsync(

@@ -227,11 +227,11 @@ def _format_preview(
                 "They"
             )
             lines.append(
-                "cannot show one thing: a file there that only the backup has and no "
-                "earlier"
+                "cannot show one thing: a file there that only the backup has and the "
+                "last"
             )
             lines.append(
-                "run recorded, which rsync DELETES. --dry-run shows every file."
+                "run did not record, which rsync DELETES. --dry-run shows every file."
             )
         else:
             lines.append(

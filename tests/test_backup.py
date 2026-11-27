@@ -131,11 +131,13 @@ class TestFormatPreview:
     def test_checked_lists_get_the_note_that_names_what_they_cannot_show(self):
         # Behavior: when the lists cover the excluded names, checked
         # against the backup, the note says so and names the one thing
-        # they cannot show.
+        # they cannot show: a file the last run did not record.
         # Bug caught: the earlier note ("the lists show only what changed
-        # on the source") would be false for such a run.
+        # on the source") would be false for such a run; so would "no
+        # earlier run recorded", since a file an earlier --no-exclude run
+        # recorded drops out of the baseline at the next ordinary run.
         # Expected values: the note's text in the 2026-11-25 design,
-        # section 2; its first line is unchanged.
+        # section 2, as amended 2026-11-26; its first line is unchanged.
         lines = _format_preview(
             Changes(),
             unexcluded=[".Trash-*", ".cache", "unfinished_downloads"],
@@ -145,8 +147,8 @@ class TestFormatPreview:
             "=== --no-exclude: rsync also syncs .Trash-*, .cache, "
             "unfinished_downloads ===",
             "The lists below cover these names too, checked against the backup. They",
-            "cannot show one thing: a file there that only the backup has and no earlier",
-            "run recorded, which rsync DELETES. --dry-run shows every file.",
+            "cannot show one thing: a file there that only the backup has and the last",
+            "run did not record, which rsync DELETES. --dry-run shows every file.",
             "=== Directory moves (0) ===",
         ]
 
