@@ -1,8 +1,8 @@
 # Design: list a move only when the backup can make it
 
 Date: 2026-11-25
-Status: implemented on branch `ask-the-backup` (plan:
-`docs/superpowers/plans/2026-11-25-ask-the-backup.md`); not merged
+Status: implemented and merged into `main` on 2026-11-26 (plan:
+`docs/superpowers/plans/2026-11-25-ask-the-backup.md`); not released
 
 ## Problem
 
