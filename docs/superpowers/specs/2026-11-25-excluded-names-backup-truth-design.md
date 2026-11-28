@@ -2,7 +2,8 @@
 
 Date: 2026-11-25
 Status: implemented and merged into `main` on 2026-11-26 (plan:
-`docs/superpowers/plans/2026-11-25-ask-the-backup.md`); not released
+`docs/superpowers/plans/2026-11-25-ask-the-backup.md`); released as 0.2.0
+on 2026-11-27
 
 ## Problem
 
